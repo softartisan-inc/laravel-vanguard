@@ -1,0 +1,67 @@
+{
+    "name": "softartisan/vanguard",
+    "description": "A powerful, multi-tenant aware backup manager for Laravel with stancl/tenancy v3 support — with a beautiful dashboard.",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["laravel", "backup", "tenancy", "multitenant", "stancl", "database", "storage", "schedule"],
+    "authors": [
+        {
+            "name": "SoftArtisan",
+            "email": "hello@softartisan.dev",
+            "homepage": "https://github.com/softartisan"
+        }
+    ],
+    "require": {
+        "php": "^8.1",
+        "illuminate/support": "^10.0|^11.0",
+        "illuminate/console": "^10.0|^11.0",
+        "illuminate/database": "^10.0|^11.0",
+        "illuminate/queue": "^10.0|^11.0",
+        "illuminate/filesystem": "^10.0|^11.0",
+        "illuminate/http": "^10.0|^11.0",
+        "illuminate/routing": "^10.0|^11.0"
+    },
+    "require-dev": {
+        "orchestra/testbench": "^8.0|^9.0",
+        "mockery/mockery": "^1.6",
+        "phpunit/phpunit": "^10.0",
+        "laravel/pint": "^1.0"
+    },
+    "suggest": {
+        "stancl/tenancy": "Required for multi-tenant backup support (^3.0)",
+        "league/flysystem-aws-s3-v3": "Required for S3 remote backup storage"
+    },
+    "autoload": {
+        "psr-4": {
+            "SoftArtisan\\Vanguard\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "SoftArtisan\\Vanguard\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "SoftArtisan\\Vanguard\\VanguardServiceProvider"
+            ],
+            "aliases": {
+                "Vanguard": "SoftArtisan\\Vanguard\\Facades\\Vanguard"
+            }
+        }
+    },
+    "scripts": {
+        "test": "vendor/bin/phpunit",
+        "test:unit":    "vendor/bin/phpunit --testsuite Unit",
+        "test:feature": "vendor/bin/phpunit --testsuite Feature",
+        "lint": "vendor/bin/pint"
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true,
+    "config": {
+        "sort-packages": true,
+        "preferred-install": "dist",
+        "optimize-autoloader": true
+    }
+}

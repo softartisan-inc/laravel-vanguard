@@ -1,0 +1,7 @@
+# Ce dossier reçoit les assets compilés par Vite.
+# Après un `npm run build`, il contiendra :
+#   - vanguard.js
+#   - vanguard.css
+#
+# Ces fichiers sont publiés dans l'application hôte via :
+#   php artisan vendor:publish --tag=vanguard-assets
