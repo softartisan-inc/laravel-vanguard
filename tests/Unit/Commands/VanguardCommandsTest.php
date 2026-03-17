@@ -67,6 +67,9 @@ class VanguardCommandsTest extends TestCase
 
         $tenancy = Mockery::mock(TenancyResolver::class);
         $tenancy->shouldReceive('isEnabled')->andReturn(true);
+        $tenancy->shouldReceive('allTenants')->andReturn(collect([
+            (object) ['id' => 't1'],
+        ]));
 
         $manager = Mockery::mock(BackupManager::class);
         $manager->shouldReceive('backupAllTenants')

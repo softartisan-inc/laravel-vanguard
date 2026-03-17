@@ -187,11 +187,7 @@ class RestoreServiceTest extends TestCase
 
         $this->storage->shouldReceive('extract')
             ->once()
-            ->with(
-                source: '/tmp/fs.tar.gz',
-                destination: Mockery::any(),
-                wipe: false,
-            );
+            ->with('/tmp/fs.tar.gz', Mockery::any(), false);
 
         $result = $this->restoreService->restore($record, [
             'verify_checksum' => false,
@@ -292,11 +288,13 @@ class RestoreServiceTest extends TestCase
 
         $this->store->shouldReceive('unBundle')->once()->andReturn([]);
 
-        $this->restoreService->restore($record, [
+        $result = $this->restoreService->restore($record, [
             'verify_checksum' => false,
             'restore_db'      => false,
             'use_remote'      => true,
         ]);
+
+        $this->assertTrue($result);
     }
 
     /** @test */

@@ -43,6 +43,10 @@ class DatabaseDriver
      */
     public function restore(string $driver, array $config, string $source): void
     {
+        if (! in_array($driver, ['mysql', 'mariadb', 'pgsql', 'sqlite'])) {
+            throw new RuntimeException("Unsupported DB driver: [{$driver}]");
+        }
+
         if (! file_exists($source)) {
             throw new RuntimeException("Restore file not found: {$source}");
         }
@@ -51,7 +55,6 @@ class DatabaseDriver
             'mysql', 'mariadb' => $this->restoreMysql($config, $source),
             'pgsql'            => $this->restorePgsql($config, $source),
             'sqlite'           => $this->restoreSqlite($config, $source),
-            default            => throw new RuntimeException("Unsupported DB driver: [{$driver}]"),
         };
     }
 

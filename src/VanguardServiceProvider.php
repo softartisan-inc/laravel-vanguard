@@ -23,6 +23,10 @@ class VanguardServiceProvider extends ServiceProvider
     {
         $this->mergeConfigFrom(__DIR__.'/../config/vanguard.php', 'vanguard');
 
+        if (! class_exists('Vanguard')) {
+            class_alias(Vanguard::class, 'Vanguard');
+        }
+
         $this->app->singleton(DatabaseDriver::class);
         $this->app->singleton(StorageDriver::class);
         $this->app->singleton(BackupStorageManager::class);

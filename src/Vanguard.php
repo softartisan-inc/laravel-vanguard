@@ -25,10 +25,13 @@ class Vanguard
     public static ?Closure $authUsing = null;
 
     /**
-     * Configure the Vanguard dashboard path.
+     * Get or set the Vanguard dashboard path.
      */
-    public static function path(string $path): static
+    public static function path(?string $path = null): string|static
     {
+        if ($path === null) {
+            return config('vanguard.path', 'vanguard');
+        }
         config(['vanguard.path' => $path]);
         return new static;
     }
