@@ -18,6 +18,17 @@ class VanguardBackupCommand extends Command
 
     protected $description = 'Run a Vanguard backup (landlord, specific tenant, or all tenants)';
 
+    /**
+     * Execute the console command.
+     *
+     * Exactly one of --landlord, --tenant, --all-tenants, or --filesystem must be provided.
+     * Exits with FAILURE and an informative message when multi-tenancy is disabled
+     * but a tenant target is requested.
+     *
+     * @param  BackupManager    $manager
+     * @param  TenancyResolver  $tenancy
+     * @return int  Command::SUCCESS or Command::FAILURE
+     */
     public function handle(BackupManager $manager, TenancyResolver $tenancy): int
     {
         $this->info('<fg=cyan>🛡  Vanguard Backup Manager</>');
@@ -87,6 +98,11 @@ class VanguardBackupCommand extends Command
         return self::FAILURE;
     }
 
+    /**
+     * Print the outcome of a single backup operation to the console.
+     *
+     * @param  mixed  $record  A BackupRecord instance (typed as mixed to avoid import in commands)
+     */
     protected function printResult(mixed $record): void
     {
         if ($record->isCompleted()) {

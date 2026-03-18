@@ -5,8 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Vanguard · Backup Manager</title>
 
-    {{-- Vanguard compiled assets (published via vendor:publish) --}}
-    <link rel="stylesheet" href="{{ asset('vendor/vanguard/vanguard.css') }}">
+    {{--
+        Uses published static files when available (served by nginx/Apache directly).
+        Falls back to the package PHP route otherwise (browser-cached via ETag).
+        Run `php artisan vendor:publish --tag=vanguard-assets` for zero PHP overhead.
+    --}}
+    <link rel="stylesheet" href="{{ Vanguard::assetUrl('vanguard.css') }}">
 </head>
 <body>
 
@@ -22,6 +26,6 @@
     data-poll-interval="{{ config('vanguard.realtime.interval', 5) }}"
 ></div>
 
-<script src="{{ asset('vendor/vanguard/vanguard.js') }}"></script>
+<script src="{{ Vanguard::assetUrl('vanguard.js') }}"></script>
 </body>
 </html>

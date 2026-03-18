@@ -5,6 +5,8 @@ import { resolve } from 'path'
 export default defineConfig({
   plugins: [vue()],
 
+  publicDir: false,
+
   build: {
     outDir:    resolve(__dirname, 'public'),
     emptyOutDir: true,

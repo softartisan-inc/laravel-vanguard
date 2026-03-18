@@ -77,6 +77,14 @@ class StorageDriver
         );
     }
 
+    /**
+     * Resolve the list of absolute filesystem paths to include in a backup.
+     *
+     * Reads from vanguard.sources.filesystem_paths (relative to storage_path())
+     * and filters out paths that do not exist.
+     *
+     * @return array<string>  Existing absolute directory paths
+     */
     public function resolveBackupPaths(): array
     {
         return collect(config('vanguard.sources.filesystem_paths', ['app']))
@@ -86,6 +94,13 @@ class StorageDriver
             ->all();
     }
 
+    /**
+     * Resolve the list of absolute filesystem paths to exclude from a backup.
+     *
+     * Reads from vanguard.sources.filesystem_exclude (relative to storage_path()).
+     *
+     * @return array<string>  Absolute paths to exclude
+     */
     public function resolveExcludePaths(): array
     {
         return collect(config('vanguard.sources.filesystem_exclude', []))
@@ -93,6 +108,14 @@ class StorageDriver
             ->all();
     }
 
+    /**
+     * Execute a shell command and throw a RuntimeException on non-zero exit.
+     *
+     * @param  string  $cmd    The shell command to run (must use escapeshellarg for all user data)
+     * @param  string  $label  Short label used in the error message (e.g. 'tar archive')
+     *
+     * @throws RuntimeException
+     */
     protected function exec(string $cmd, string $label): void
     {
         exec($cmd, $output, $exitCode);

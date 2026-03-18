@@ -154,6 +154,23 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Rate Limiting
+    |--------------------------------------------------------------------------
+    | Controls how many requests each authenticated user can make per minute
+    | to the Vanguard API. Set a value to 0 to disable the limit entirely.
+    |
+    | 'run'     — POST /api/backups/run     (triggers a backup)
+    | 'restore' — POST /api/backups/{id}/restore
+    | 'api'     — all other API endpoints (stats, list, delete…)
+    */
+    'rate_limits' => [
+        'run'     => env('VANGUARD_RATE_LIMIT_RUN',     5),
+        'restore' => env('VANGUARD_RATE_LIMIT_RESTORE', 3),
+        'api'     => env('VANGUARD_RATE_LIMIT_API',     60),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Realtime Updates
     |--------------------------------------------------------------------------
     | Controls how the dashboard receives live updates.

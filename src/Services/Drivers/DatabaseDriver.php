@@ -13,6 +13,8 @@ class DatabaseDriver
      * @param  array   $config       Laravel DB connection config
      * @param  string  $destination  Absolute path for output (.sql.gz)
      * @return string                Path to the created dump file
+     *
+     * @throws RuntimeException For unsupported drivers or if the dump file is empty/missing
      */
     public function dump(string $driver, array $config, string $destination): string
     {
@@ -40,6 +42,12 @@ class DatabaseDriver
 
     /**
      * Restore a .sql.gz dump into a database.
+     *
+     * @param  string  $driver  'mysql'|'mariadb'|'pgsql'|'sqlite'
+     * @param  array   $config  Laravel DB connection config
+     * @param  string  $source  Absolute path to the .sql.gz dump file
+     *
+     * @throws RuntimeException For unsupported drivers or missing source file
      */
     public function restore(string $driver, array $config, string $source): void
     {
@@ -60,34 +68,67 @@ class DatabaseDriver
 
     // ─── MySQL / MariaDB ─────────────────────────────────────────
 
+    /**
+     * Dump a MySQL/MariaDB database to a gzipped SQL file via mysqldump.
+     *
+     * Uses MYSQL_PWD environment variable to pass the password securely.
+     *
+     * @param  array   $c     Laravel MySQL connection config
+     * @param  string  $dest  Absolute destination path (.sql.gz)
+     */
     protected function dumpMysql(array $c, string $dest): void
     {
         $this->setMysqlPasswordEnv($c);
 
-        $cmd = sprintf(
-            'mysqldump %s %s 2>&1 | gzip > %s',
-            $this->mysqlConnectionArgs($c),
-            escapeshellarg($c['database']),
-            escapeshellarg($dest),
-        );
+        try {
+            $cmd = sprintf(
+                'mysqldump %s %s 2>&1 | gzip > %s',
+                $this->mysqlConnectionArgs($c),
+                escapeshellarg($c['database']),
+                escapeshellarg($dest),
+            );
 
-        $this->exec($cmd, 'mysqldump');
+            $this->exec($cmd, 'mysqldump');
+        } finally {
+            $this->clearMysqlPasswordEnv();
+        }
     }
 
+    /**
+     * Restore a MySQL/MariaDB database from a gzipped SQL dump.
+     *
+     * Uses MYSQL_PWD environment variable to pass the password securely.
+     *
+     * @param  array   $c    Laravel MySQL connection config
+     * @param  string  $src  Absolute path to the .sql.gz dump file
+     */
     protected function restoreMysql(array $c, string $src): void
     {
         $this->setMysqlPasswordEnv($c);
 
-        $cmd = sprintf(
-            'gunzip -c %s | mysql %s %s 2>&1',
-            escapeshellarg($src),
-            $this->mysqlConnectionArgs($c),
-            escapeshellarg($c['database']),
-        );
+        try {
+            $cmd = sprintf(
+                'gunzip -c %s | mysql %s %s 2>&1',
+                escapeshellarg($src),
+                $this->mysqlConnectionArgs($c),
+                escapeshellarg($c['database']),
+            );
 
-        $this->exec($cmd, 'mysql restore');
+            $this->exec($cmd, 'mysql restore');
+        } finally {
+            $this->clearMysqlPasswordEnv();
+        }
     }
 
+    /**
+     * Build the common MySQL connection arguments string (host, port, user, socket, flags).
+     *
+     * The password is intentionally omitted here and passed via the MYSQL_PWD
+     * environment variable to avoid exposing it in the process list.
+     *
+     * @param  array  $c  Laravel MySQL connection config
+     * @return string     Shell-safe argument string
+     */
     protected function mysqlConnectionArgs(array $c): string
     {
         $args = sprintf(
@@ -110,6 +151,15 @@ class DatabaseDriver
         return $args;
     }
 
+    /**
+     * Set the MYSQL_PWD environment variable for the current process.
+     *
+     * This avoids passing the password on the command line where it would be
+     * visible in the system process list. Always call clearMysqlPasswordEnv()
+     * in a finally block after the command completes.
+     *
+     * @param  array  $c  Laravel MySQL connection config
+     */
     protected function setMysqlPasswordEnv(array $c): void
     {
         if (! empty($c['password'])) {
@@ -117,8 +167,27 @@ class DatabaseDriver
         }
     }
 
+    /**
+     * Remove MYSQL_PWD from the process environment.
+     *
+     * Called in a finally block after dumpMysql/restoreMysql so that the
+     * credential does not persist in the process env across subsequent jobs.
+     */
+    protected function clearMysqlPasswordEnv(): void
+    {
+        putenv('MYSQL_PWD');
+    }
+
     // ─── PostgreSQL ───────────────────────────────────────────────
 
+    /**
+     * Dump a PostgreSQL database to a gzipped SQL file via pg_dump.
+     *
+     * The password is passed via the PGPASSWORD environment variable prefix.
+     *
+     * @param  array   $c     Laravel PostgreSQL connection config
+     * @param  string  $dest  Absolute destination path (.sql.gz)
+     */
     protected function dumpPgsql(array $c, string $dest): void
     {
         $cmd = sprintf(
@@ -134,6 +203,14 @@ class DatabaseDriver
         $this->exec($cmd, 'pg_dump');
     }
 
+    /**
+     * Restore a PostgreSQL database from a gzipped SQL dump via psql.
+     *
+     * The password is passed via the PGPASSWORD environment variable prefix.
+     *
+     * @param  array   $c    Laravel PostgreSQL connection config
+     * @param  string  $src  Absolute path to the .sql.gz dump file
+     */
     protected function restorePgsql(array $c, string $src): void
     {
         $cmd = sprintf(
@@ -149,6 +226,15 @@ class DatabaseDriver
         $this->exec($cmd, 'psql restore');
     }
 
+    /**
+     * Build the PGPASSWORD=... environment variable prefix for a PostgreSQL command.
+     *
+     * Returns an empty string when no password is set so the prefix can be
+     * safely prepended to any command without causing syntax errors.
+     *
+     * @param  array  $c  Laravel PostgreSQL connection config
+     * @return string     e.g. "PGPASSWORD='secret'" or ""
+     */
     protected function pgPasswordEnv(array $c): string
     {
         return ! empty($c['password'])
@@ -158,6 +244,18 @@ class DatabaseDriver
 
     // ─── SQLite ───────────────────────────────────────────────────
 
+    /**
+     * Dump a SQLite database to a gzipped file.
+     *
+     * For in-memory databases (used in tests), the schema is exported via PDO
+     * and written directly to a gzip stream. For file-based databases, gzip
+     * compresses the file directly for speed.
+     *
+     * @param  array   $c     Laravel SQLite connection config
+     * @param  string  $dest  Absolute destination path (.sql.gz)
+     *
+     * @throws RuntimeException If the database file does not exist
+     */
     protected function dumpSqlite(array $c, string $dest): void
     {
         $src = $c['database'];
@@ -186,6 +284,14 @@ class DatabaseDriver
         );
     }
 
+    /**
+     * Restore a SQLite database from a gzipped dump.
+     *
+     * No-op for in-memory databases as there is nothing meaningful to restore to.
+     *
+     * @param  array   $c    Laravel SQLite connection config
+     * @param  string  $src  Absolute path to the gzipped SQLite file
+     */
     protected function restoreSqlite(array $c, string $src): void
     {
         $target = $c['database'];
@@ -202,6 +308,14 @@ class DatabaseDriver
 
     // ─── Helpers ──────────────────────────────────────────────────
 
+    /**
+     * Execute a shell command and throw a RuntimeException on non-zero exit.
+     *
+     * @param  string  $cmd    The shell command to run (must use escapeshellarg for all user data)
+     * @param  string  $label  Short label used in the error message (e.g. 'mysqldump')
+     *
+     * @throws RuntimeException
+     */
     protected function exec(string $cmd, string $label): void
     {
         exec($cmd, $output, $exitCode);

@@ -1,0 +1,42 @@
+#!/usr/bin/env sh
+#
+# Validate that the commit message follows the Conventional Commits spec.
+# https://www.conventionalcommits.org/
+#
+# Allowed types: feat, fix, docs, style, refactor, perf, test, chore, ci, revert, security
+#
+
+MSG_FILE="$1"
+COMMIT_MSG=$(head -1 "$MSG_FILE")
+
+PATTERN="^(feat|fix|docs|style|refactor|perf|test|chore|ci|revert|security)(\(.+\))?(!)?: .{1,100}"
+
+if ! echo "$COMMIT_MSG" | grep -qE "$PATTERN"; then
+  echo ""
+  echo "  ✗ Commit message does not follow Conventional Commits format."
+  echo ""
+  echo "  Expected format:"
+  echo "    <type>(<scope>): <description>"
+  echo ""
+  echo "  Allowed types:"
+  echo "    feat      New feature"
+  echo "    fix       Bug fix"
+  echo "    docs      Documentation only"
+  echo "    style     Code style (no logic change)"
+  echo "    refactor  Refactoring (no feature, no fix)"
+  echo "    perf      Performance improvement"
+  echo "    test      Adding/updating tests"
+  echo "    chore     Tooling, config, deps"
+  echo "    ci        CI/CD changes"
+  echo "    revert    Revert a previous commit"
+  echo "    security  Security fix"
+  echo ""
+  echo "  Examples:"
+  echo "    feat(backup): add disk space validation before backup"
+  echo "    fix(api): validate filter parameters in backups index"
+  echo "    chore!: drop support for PHP 8.0"
+  echo ""
+  echo "  Your message: \"$COMMIT_MSG\""
+  echo ""
+  exit 1
+fi

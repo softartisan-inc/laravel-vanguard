@@ -4,6 +4,7 @@ namespace SoftArtisan\Vanguard\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
+use Illuminate\Support\Facades\DB;
 use SoftArtisan\Vanguard\Models\BackupRecord;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
@@ -27,36 +28,48 @@ class SseController extends Controller
     public function stream(Request $request): StreamedResponse
     {
         return new StreamedResponse(function () use ($request) {
-            // Disable output buffering so events reach the client immediately
+            // Remove PHP's execution time limit for the duration of this stream.
+            // On Linux, sleep() does not count toward max_execution_time, but this
+            // makes the behaviour explicit and portable across server configurations.
+            set_time_limit(0);
+
+            // Disable output buffering so events reach the client immediately.
             if (ob_get_level() > 0) {
                 ob_end_clean();
             }
 
-            // Required SSE headers are set below in headers()
-            // Send initial connection confirmation
             $this->sendEvent('connected', ['status' => 'ok', 'driver' => 'sse']);
 
-            $interval    = config('vanguard.realtime.sse_interval', 2);   // seconds between DB polls
-            $maxLifetime = config('vanguard.realtime.max_lifetime', 120); // close after N seconds
+            $interval    = config('vanguard.realtime.sse_interval', 2);
+            $maxLifetime = config('vanguard.realtime.max_lifetime', 120);
             $started     = time();
             $lastSnapshot = $this->snapshot();
 
+            // Release the DB connection immediately after the first snapshot so
+            // the connection slot is not held open during the sleep periods.
+            // A fresh connection is acquired only when the next poll runs.
+            DB::connection()->disconnect();
+
             while (true) {
-                // Respect max lifetime to avoid zombie connections
                 if ((time() - $started) >= $maxLifetime) {
                     $this->sendEvent('close', ['reason' => 'max_lifetime']);
                     break;
                 }
 
-                // Check if client disconnected
                 if (connection_aborted()) {
                     break;
                 }
 
                 sleep($interval);
 
-                // Compare current DB state with last known state
-                $current = $this->snapshot();
+                // Reconnect, poll, disconnect — keeps the DB slot free during sleeps.
+                // try/finally ensures disconnect even if snapshot() throws.
+                DB::connection()->reconnect();
+                try {
+                    $current = $this->snapshot();
+                } finally {
+                    DB::connection()->disconnect();
+                }
 
                 if ($current !== $lastSnapshot) {
                     $this->sendEvent('vanguard', [
@@ -66,17 +79,12 @@ class SseController extends Controller
                     ]);
                     $lastSnapshot = $current;
                 } else {
-                    // Send a heartbeat to keep the connection alive
                     $this->sendHeartbeat();
                 }
-
-                // Flush output to the client
-                if (function_exists('fastcgi_finish_request')) {
-                    // Not applicable in SSE — skip
-                } else {
-                    flush();
-                }
             }
+
+            // Restore the connection for any cleanup Laravel may perform after the response.
+            DB::connection()->reconnect();
         }, 200, $this->sseHeaders());
     }
 

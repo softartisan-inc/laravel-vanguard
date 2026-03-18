@@ -14,6 +14,13 @@ class VanguardListCommand extends Command
 
     protected $description = 'List Vanguard backup records';
 
+    /**
+     * Execute the console command.
+     *
+     * Queries backup records with optional filters and renders them as a table.
+     *
+     * @return int  Command::SUCCESS
+     */
     public function handle(): int
     {
         $query = BackupRecord::latest();
@@ -49,6 +56,12 @@ class VanguardListCommand extends Command
         return self::SUCCESS;
     }
 
+    /**
+     * Wrap a status string in an Artisan console color tag.
+     *
+     * @param  string  $status  'completed'|'failed'|'running'|other
+     * @return string  The status string wrapped in a color tag for terminal output
+     */
     protected function colorStatus(string $status): string
     {
         return match ($status) {

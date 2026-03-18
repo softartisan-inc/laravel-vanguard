@@ -17,6 +17,15 @@ class VanguardRestoreCommand extends Command
 
     protected $description = 'Restore a backup by its record ID';
 
+    /**
+     * Execute the console command.
+     *
+     * Displays backup metadata, prompts for confirmation (unless --force),
+     * then delegates to RestoreService::restore().
+     *
+     * @param  RestoreService  $restoreService
+     * @return int  Command::SUCCESS or Command::FAILURE
+     */
     public function handle(RestoreService $restoreService): int
     {
         $record = BackupRecord::find($this->argument('id'));

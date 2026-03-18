@@ -2,6 +2,9 @@
 
 namespace SoftArtisan\Vanguard;
 
+use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
 use SoftArtisan\Vanguard\Commands\VanguardBackupCommand;
@@ -19,6 +22,13 @@ use SoftArtisan\Vanguard\Console\VanguardScheduler;
 
 class VanguardServiceProvider extends ServiceProvider
 {
+    /**
+     * Register package services and singletons into the container.
+     *
+     * Merges the package config so host-app overrides take precedence,
+     * registers a class alias for the Vanguard facade root, and binds all
+     * service singletons.
+     */
     public function register(): void
     {
         $this->mergeConfigFrom(__DIR__.'/../config/vanguard.php', 'vanguard');
@@ -27,18 +37,25 @@ class VanguardServiceProvider extends ServiceProvider
             class_alias(Vanguard::class, 'Vanguard');
         }
 
+        // Stateless helpers — safe as singletons.
         $this->app->singleton(DatabaseDriver::class);
         $this->app->singleton(StorageDriver::class);
-        $this->app->singleton(BackupStorageManager::class);
         $this->app->singleton(TenancyResolver::class);
 
-        $this->app->singleton(RestoreService::class, fn ($app) => new RestoreService(
+        // BackupStorageManager holds session-scoped state ($sessionTmpDir).
+        // BackupManager and RestoreService own a BackupStorageManager instance.
+        // All three must be transient (bind) so that each queue job / request
+        // gets a clean instance — singletons would leak stale tmp paths across
+        // jobs in long-running workers.
+        $this->app->bind(BackupStorageManager::class);
+
+        $this->app->bind(RestoreService::class, fn ($app) => new RestoreService(
             $app->make(DatabaseDriver::class),
             $app->make(StorageDriver::class),
             $app->make(BackupStorageManager::class),
         ));
 
-        $this->app->singleton(BackupManager::class, fn ($app) => new BackupManager(
+        $this->app->bind(BackupManager::class, fn ($app) => new BackupManager(
             $app->make(DatabaseDriver::class),
             $app->make(StorageDriver::class),
             $app->make(BackupStorageManager::class),
@@ -46,16 +63,29 @@ class VanguardServiceProvider extends ServiceProvider
         ));
     }
 
+    /**
+     * Bootstrap package services.
+     *
+     * Registers publishable assets, Artisan commands, routes, views,
+     * migrations, and the scheduler in the correct order.
+     */
     public function boot(): void
     {
         $this->registerPublishing();
         $this->registerCommands();
+        $this->registerRateLimiters();
         $this->registerRoutes();
         $this->registerViews();
         $this->registerMigrations();
         $this->registerScheduler();
     }
 
+    /**
+     * Register publishable stubs for vendor:publish.
+     *
+     * Available tags: vanguard-config, vanguard-migrations, vanguard-views, vanguard-assets.
+     * Only runs in console context to avoid overhead on HTTP requests.
+     */
     protected function registerPublishing(): void
     {
         if (! $this->app->runningInConsole()) {
@@ -81,6 +111,36 @@ class VanguardServiceProvider extends ServiceProvider
         ], 'vanguard-assets');
     }
 
+    /**
+     * Register named rate limiters used by the Vanguard API routes.
+     *
+     * Each limiter is keyed by authenticated user ID when available,
+     * falling back to IP address for unauthenticated contexts.
+     * Set the corresponding env variable to 0 to disable a limiter.
+     */
+    protected function registerRateLimiters(): void
+    {
+        $by = fn (Request $r) => $r->user()?->id ?: $r->ip();
+
+        foreach ([
+            'vanguard.run'     => 'run',
+            'vanguard.restore' => 'restore',
+            'vanguard.api'     => 'api',
+        ] as $name => $key) {
+            $max = (int) config("vanguard.rate_limits.{$key}", 60);
+
+            RateLimiter::for($name, $max > 0
+                ? fn (Request $r) => Limit::perMinute($max)->by($by($r))
+                : fn ()           => Limit::none(),
+            );
+        }
+    }
+
+    /**
+     * Register Vanguard's Artisan commands.
+     *
+     * Only runs in console context to avoid loading command classes on HTTP requests.
+     */
     protected function registerCommands(): void
     {
         if (! $this->app->runningInConsole()) {
@@ -96,6 +156,11 @@ class VanguardServiceProvider extends ServiceProvider
         ]);
     }
 
+    /**
+     * Register the Vanguard dashboard and API routes.
+     *
+     * Skipped when Vanguard::ignoreRoutes() has been called (e.g. for manual route registration).
+     */
     protected function registerRoutes(): void
     {
         if (Vanguard::$registersRoutes) {
@@ -105,6 +170,11 @@ class VanguardServiceProvider extends ServiceProvider
         }
     }
 
+    /**
+     * Build the route group configuration array from the package config.
+     *
+     * @return array{domain: string|null, prefix: string, middleware: array<string>}
+     */
     protected function routeConfiguration(): array
     {
         return [
@@ -114,11 +184,20 @@ class VanguardServiceProvider extends ServiceProvider
         ];
     }
 
+    /**
+     * Register the Vanguard Blade view namespace ('vanguard::').
+     */
     protected function registerViews(): void
     {
         $this->loadViewsFrom(__DIR__.'/../resources/views', 'vanguard');
     }
 
+    /**
+     * Load Vanguard's migrations automatically.
+     *
+     * Skipped when Vanguard::ignoreMigrations() has been called so that
+     * applications managing their own migration files are not affected.
+     */
     protected function registerMigrations(): void
     {
         if (Vanguard::$runsMigrations) {
@@ -126,6 +205,12 @@ class VanguardServiceProvider extends ServiceProvider
         }
     }
 
+    /**
+     * Register the VanguardScheduler after the application has fully booted.
+     *
+     * Deferring until 'booted' ensures the Schedule singleton is resolved
+     * after all other service providers have had a chance to configure it.
+     */
     protected function registerScheduler(): void
     {
         $this->app->booted(function () {

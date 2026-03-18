@@ -1,6 +1,6 @@
 import { createApp } from 'vue'
 import App from './App.vue'
-import '../../../css/vanguard.css'
+import '../../css/vanguard.css'
 
 // Mount on the element injected by Blade
 const el = document.getElementById('vanguard-app')

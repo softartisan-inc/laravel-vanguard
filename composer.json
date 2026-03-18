@@ -22,10 +22,10 @@
         "illuminate/routing": "^10.0|^11.0"
     },
     "require-dev": {
-        "orchestra/testbench": "^8.0|^9.0",
+        "laravel/pint": "^1.0",
         "mockery/mockery": "^1.6",
-        "phpunit/phpunit": "^10.0",
-        "laravel/pint": "^1.0"
+        "orchestra/testbench": "^9.16",
+        "phpunit/phpunit": "^10.0"
     },
     "suggest": {
         "stancl/tenancy": "Required for multi-tenant backup support (^3.0)",
@@ -55,7 +55,10 @@
         "test": "vendor/bin/phpunit",
         "test:unit":    "vendor/bin/phpunit --testsuite Unit",
         "test:feature": "vendor/bin/phpunit --testsuite Feature",
-        "lint": "vendor/bin/pint"
+        "lint": "vendor/bin/pint",
+        "post-install-cmd": ["@setup-hooks"],
+        "post-update-cmd":  ["@setup-hooks"],
+        "setup-hooks": "sh scripts/setup-hooks.sh"
     },
     "minimum-stability": "stable",
     "prefer-stable": true,

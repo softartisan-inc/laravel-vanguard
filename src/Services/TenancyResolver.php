@@ -8,12 +8,20 @@ class TenancyResolver
 {
     protected bool $tenancyAvailable;
 
+    /**
+     * Initialise the resolver by probing whether stancl/tenancy is installed and enabled.
+     */
     public function __construct()
     {
         $this->tenancyAvailable = config('vanguard.tenancy.enabled', true)
             && interface_exists(\Stancl\Tenancy\Contracts\Tenant::class);
     }
 
+    /**
+     * Whether multi-tenancy is enabled and the stancl/tenancy package is available.
+     *
+     * @return bool
+     */
     public function isEnabled(): bool
     {
         return $this->tenancyAvailable;
@@ -21,6 +29,8 @@ class TenancyResolver
 
     /**
      * Get all tenant instances.
+     *
+     * Returns an empty collection when tenancy is disabled.
      *
      * @return \Illuminate\Support\Collection<\Stancl\Tenancy\Contracts\Tenant>
      */
@@ -35,7 +45,12 @@ class TenancyResolver
     }
 
     /**
-     * Find a tenant by its key.
+     * Find a tenant by its primary key.
+     *
+     * @param  string  $tenantKey
+     * @return mixed  The tenant model instance
+     *
+     * @throws \Illuminate\Database\Eloquent\ModelNotFoundException
      */
     public function findTenant(string $tenantKey): mixed
     {
@@ -44,7 +59,13 @@ class TenancyResolver
     }
 
     /**
-     * Initialize tenancy context for a tenant, run callback, then end.
+     * Initialize tenancy context for a tenant, run a callback, then end the context.
+     *
+     * The tenancy context is always ended in a finally block, even if the callback throws.
+     *
+     * @param  mixed     $tenant    A tenant model instance
+     * @param  callable  $callback  Receives the tenant as its first argument
+     * @return mixed  The return value of the callback
      */
     public function runForTenant(mixed $tenant, callable $callback): mixed
     {
@@ -58,7 +79,13 @@ class TenancyResolver
 
     /**
      * Get the current active DB connection config for the tenant.
+     *
      * stancl/tenancy switches the connection automatically after initialize().
+     * Must be called inside a runForTenant() callback.
+     *
+     * @return array  Laravel database connection config array
+     *
+     * @throws RuntimeException If the tenant connection is not configured
      */
     public function tenantDbConfig(): array
     {
@@ -77,7 +104,12 @@ class TenancyResolver
 
     /**
      * Get the tenant's custom backup schedule if set (optional column on tenant model).
-     * Returns null if not configured.
+     *
+     * Tenants may optionally have a 'vanguard_schedule' attribute containing a
+     * cron expression that overrides the global schedule.
+     *
+     * @param  mixed  $tenant  Tenant model instance
+     * @return string|null  Cron expression, or null if not configured
      */
     public function tenantSchedule(mixed $tenant): ?string
     {
@@ -92,6 +124,11 @@ class TenancyResolver
 
     /**
      * Get the landlord (central) DB connection config.
+     *
+     * Reads the central connection name from stancl/tenancy config, falling
+     * back to the application default connection.
+     *
+     * @return array  Laravel database connection config array
      */
     public function landlordDbConfig(): array
     {

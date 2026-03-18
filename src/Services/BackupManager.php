@@ -3,6 +3,7 @@
 namespace SoftArtisan\Vanguard\Services;
 
 use Illuminate\Support\Facades\Log;
+use RuntimeException;
 use SoftArtisan\Vanguard\Events\BackupCompleted;
 use SoftArtisan\Vanguard\Events\BackupFailed;
 use SoftArtisan\Vanguard\Events\BackupStarted;
@@ -12,6 +13,12 @@ use SoftArtisan\Vanguard\Services\Drivers\StorageDriver;
 
 class BackupManager
 {
+    /**
+     * @param  DatabaseDriver       $db
+     * @param  StorageDriver        $storage
+     * @param  BackupStorageManager $store
+     * @param  TenancyResolver      $tenancy
+     */
     public function __construct(
         protected DatabaseDriver      $db,
         protected StorageDriver       $storage,
@@ -25,9 +32,21 @@ class BackupManager
 
     /**
      * Run a full landlord backup (central DB + filesystem).
+     *
+     * Creates a BackupRecord, fires BackupStarted, runs all configured sources,
+     * bundles the output, then fires BackupCompleted or BackupFailed.
+     * The tmp directory is always cleaned up in a finally block.
+     *
+     * @param  array  $options  Supported keys:
+     *                          - 'include_filesystem' (bool) — default true
+     * @return BackupRecord  A freshly reloaded record with final status
+     *
+     * @throws \Throwable  Re-throws any exception after recording the failure
      */
     public function backupLandlord(array $options = []): BackupRecord
     {
+        $this->assertSufficientDiskSpace();
+
         $record = $this->createRecord(null, 'landlord', $options);
 
         try {
@@ -73,9 +92,21 @@ class BackupManager
 
     /**
      * Run a backup for a single tenant.
+     *
+     * Initialises the tenancy context via TenancyResolver::runForTenant() to
+     * ensure the correct database connection is active during the dump.
+     *
+     * @param  mixed  $tenant   A tenant model instance (must implement getTenantKey())
+     * @param  array  $options  Supported keys:
+     *                          - 'include_filesystem' (bool) — default false for tenant backups
+     * @return BackupRecord  A freshly reloaded record with final status
+     *
+     * @throws \Throwable  Re-throws any exception after recording the failure
      */
     public function backupTenant(mixed $tenant, array $options = []): BackupRecord
     {
+        $this->assertSufficientDiskSpace();
+
         $tenantId = $tenant->getTenantKey();
         $record   = $this->createRecord($tenantId, 'tenant', $options);
 
@@ -124,9 +155,18 @@ class BackupManager
 
     /**
      * Run a filesystem-only backup (no DB).
+     *
+     * Useful for backing up uploaded files independently of the database schedule.
+     *
+     * @param  array  $options  Reserved for future use
+     * @return BackupRecord  A freshly reloaded record with final status
+     *
+     * @throws \Throwable  Re-throws any exception after recording the failure
      */
     public function backupFilesystem(array $options = []): BackupRecord
     {
+        $this->assertSufficientDiskSpace();
+
         $record = $this->createRecord(null, 'filesystem', $options);
 
         try {
@@ -158,6 +198,15 @@ class BackupManager
 
     /**
      * Backup ALL tenants sequentially (queue-friendly: dispatches jobs when queue is enabled).
+     *
+     * When the queue is enabled, each tenant backup is dispatched as a
+     * RunTenantBackupJob. Individual tenant failures are caught and logged
+     * without halting the remaining tenants.
+     *
+     * @param  array  $options  Forwarded to backupTenant() or RunTenantBackupJob
+     * @return array  One entry per tenant: ['tenant' => id, 'queued' => true]
+     *                or ['tenant' => id, 'record' => BackupRecord]
+     *                or ['tenant' => id, 'error' => string]
      */
     public function backupAllTenants(array $options = []): array
     {
@@ -190,6 +239,50 @@ class BackupManager
     // HELPERS
     // ─────────────────────────────────────────────────────────────
 
+    /**
+     * Ensure there is at least 100 MB of free space in the tmp directory before starting a backup.
+     *
+     * Logs a warning if the free space cannot be determined (e.g. unsupported filesystem)
+     * and allows the backup to proceed. Only throws when free space is definitively too low.
+     *
+     * @param  int  $minFreeMb  Minimum required free space in megabytes (default: 100)
+     *
+     * @throws RuntimeException If free space is below the required minimum
+     */
+    protected function assertSufficientDiskSpace(int $minFreeMb = 100): void
+    {
+        $tmpPath = config('vanguard.tmp_path', storage_path('vanguard-tmp'));
+
+        // Use the parent directory if the tmp dir doesn't exist yet.
+        $checkPath = is_dir($tmpPath) ? $tmpPath : dirname($tmpPath);
+
+        $freeBytes = @disk_free_space($checkPath);
+
+        if ($freeBytes === false) {
+            Log::warning('[Vanguard] Could not determine free disk space', ['path' => $checkPath]);
+            return;
+        }
+
+        $minFreeBytes = $minFreeMb * 1024 * 1024;
+
+        if ($freeBytes < $minFreeBytes) {
+            throw new RuntimeException(sprintf(
+                '[Vanguard] Insufficient disk space: %.1f MB free, %d MB required in %s',
+                $freeBytes / 1024 / 1024,
+                $minFreeMb,
+                $checkPath,
+            ));
+        }
+    }
+
+    /**
+     * Create and persist a new BackupRecord in 'running' status.
+     *
+     * @param  string|null  $tenantId  Null for landlord/filesystem backups
+     * @param  string       $type      'landlord'|'tenant'|'filesystem'
+     * @param  array        $meta      Arbitrary options stored on the record
+     * @return BackupRecord
+     */
     protected function createRecord(?string $tenantId, string $type, array $meta = []): BackupRecord
     {
         return BackupRecord::create([
@@ -210,6 +303,12 @@ class BackupManager
         ]);
     }
 
+    /**
+     * Update a BackupRecord to 'completed' status with bundle metadata.
+     *
+     * @param  BackupRecord  $record
+     * @param  array         $bundle  Output of BackupStorageManager::bundle()
+     */
     protected function completeRecord(BackupRecord $record, array $bundle): void
     {
         $record->update([
@@ -222,6 +321,12 @@ class BackupManager
         ]);
     }
 
+    /**
+     * Update a BackupRecord to 'failed' status and log the error.
+     *
+     * @param  BackupRecord  $record
+     * @param  \Throwable    $e
+     */
     protected function failRecord(BackupRecord $record, \Throwable $e): void
     {
         $record->update([

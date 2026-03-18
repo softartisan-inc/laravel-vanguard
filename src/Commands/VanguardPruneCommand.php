@@ -13,6 +13,15 @@ class VanguardPruneCommand extends Command
 
     protected $description = 'Prune old Vanguard backup records beyond the retention policy';
 
+    /**
+     * Execute the console command.
+     *
+     * Overrides the configured retention period when --days is passed.
+     * Delegates the actual deletion to BackupStorageManager::pruneOldBackups().
+     *
+     * @param  BackupStorageManager  $store
+     * @return int  Command::SUCCESS
+     */
     public function handle(BackupStorageManager $store): int
     {
         if ($days = $this->option('days')) {

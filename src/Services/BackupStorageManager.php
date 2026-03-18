@@ -10,6 +10,12 @@ class BackupStorageManager
     protected string $sessionTmpDir;
     protected array  $trackedTmpFiles = [];
 
+    /**
+     * Create a unique session-scoped temporary directory for this backup run.
+     *
+     * The directory is created with 0700 permissions to restrict access to the
+     * web server user. It is cleaned up automatically after each backup via cleanTmp().
+     */
     public function __construct()
     {
         $base = config('vanguard.tmp_path', storage_path('vanguard-tmp'));
@@ -19,6 +25,12 @@ class BackupStorageManager
 
     // ─── Temp File Management ─────────────────────────────────────
 
+    /**
+     * Return an absolute path inside the session tmp directory and register it for cleanup.
+     *
+     * @param  string  $filename  Relative filename (e.g. 'landlord_1_db.sql.gz')
+     * @return string  Absolute path to the tmp file
+     */
     public function tmpPath(string $filename): string
     {
         $path = $this->sessionTmpDir.DIRECTORY_SEPARATOR.$filename;
@@ -26,6 +38,11 @@ class BackupStorageManager
         return $path;
     }
 
+    /**
+     * Remove the entire session tmp directory and reset the tracked file list.
+     *
+     * Should be called in a finally block after each backup or restore operation.
+     */
     public function cleanTmp(): void
     {
         if (is_dir($this->sessionTmpDir)) {
@@ -40,6 +57,11 @@ class BackupStorageManager
      * Bundle component files into a single .tar archive and persist to disk(s).
      *
      * Uses shell tar — requires Unix (Linux/macOS).
+     *
+     * Remote destination is written first (streaming, keeps bundlePath intact).
+     * Local destination is written last and uses rename() when source and
+     * destination share the same filesystem — atomic, O(1), zero data copy.
+     * Falls back to a stream copy when rename() crosses filesystem boundaries.
      *
      * @param  array   $files  ['database' => '/tmp/...sql.gz', 'storage' => '/tmp/...tar.gz']
      * @param  string  $name   Base name for the archive
@@ -79,25 +101,77 @@ class BackupStorageManager
         $size     = filesize($bundlePath);
         $result   = ['size' => $size, 'checksum' => $checksum, 'local_path' => null, 'remote_path' => null];
 
-        if (config('vanguard.destinations.local.enabled', true)) {
-            $localDisk = config('vanguard.destinations.local.disk', 'local');
-            $localPath = config('vanguard.destinations.local.path', 'vanguard-backups')."/{$name}.tar";
-            Storage::disk($localDisk)->put($localPath, file_get_contents($bundlePath));
-            $result['local_path'] = $localPath;
-        }
-
+        // Remote first — stream while bundlePath is still on disk.
+        // Flysystem's S3 adapter automatically uses multipart upload for large streams.
         if (config('vanguard.destinations.remote.enabled', false)) {
             $remoteDisk = config('vanguard.destinations.remote.disk', 's3');
             $remotePath = config('vanguard.destinations.remote.path', 'vanguard-backups')."/{$name}.tar";
-            Storage::disk($remoteDisk)->put($remotePath, file_get_contents($bundlePath));
+            $stream = fopen($bundlePath, 'rb');
+            Storage::disk($remoteDisk)->put($remotePath, $stream);
+            fclose($stream);
             $result['remote_path'] = $remotePath;
+        }
+
+        // Local last — attempt zero-copy rename(); fall back to stream if needed.
+        if (config('vanguard.destinations.local.enabled', true)) {
+            $localDisk = config('vanguard.destinations.local.disk', 'local');
+            $localPath = config('vanguard.destinations.local.path', 'vanguard-backups')."/{$name}.tar";
+            $this->persistToLocalDisk($bundlePath, $localDisk, $localPath);
+            $result['local_path'] = $localPath;
         }
 
         return $result;
     }
 
+    /**
+     * Persist a file to a local Flysystem disk with the fastest available strategy.
+     *
+     * For the 'local' driver: attempts an atomic rename() (O(1), zero copy) when
+     * source and destination are on the same filesystem. Falls back to a PHP stream
+     * copy when they are not (e.g. tmp on tmpfs, storage on ext4).
+     *
+     * For any other driver (ftp, sftp, custom local adapters): always streams.
+     *
+     * @param  string  $sourcePath   Absolute path to the file to persist (may be consumed by rename)
+     * @param  string  $disk         Filesystem disk name
+     * @param  string  $storagePath  Destination path relative to the disk root
+     */
+    protected function persistToLocalDisk(string $sourcePath, string $disk, string $storagePath): void
+    {
+        $diskConfig = config("filesystems.disks.{$disk}", []);
+
+        if (($diskConfig['driver'] ?? '') === 'local') {
+            // Ask Flysystem for the canonical absolute destination path so that
+            // the renamed file is found by subsequent Storage::disk()->exists()
+            // and readStream() calls regardless of the test/runtime environment.
+            $destPath = Storage::disk($disk)->path($storagePath);
+
+            @mkdir(dirname($destPath), 0755, true);
+
+            // rename() is atomic and O(1) on the same filesystem.
+            // It returns false (EXDEV) when crossing filesystem boundaries.
+            if (@rename($sourcePath, $destPath)) {
+                return;
+            }
+        }
+
+        // Fallback: stream copy — no full file in memory.
+        $stream = fopen($sourcePath, 'rb');
+        Storage::disk($disk)->put($storagePath, $stream);
+        fclose($stream);
+    }
+
     // ─── Download for Restore ─────────────────────────────────────
 
+    /**
+     * Download a stored backup archive into the session tmp directory.
+     *
+     * @param  string  $storedPath  Path on disk as recorded in the BackupRecord
+     * @param  bool    $remote      Whether to read from the remote disk instead of local
+     * @return string  Absolute path to the downloaded file in the tmp directory
+     *
+     * @throws RuntimeException If the file does not exist on the disk
+     */
     public function download(string $storedPath, bool $remote = false): string
     {
         $disk = $remote
@@ -110,14 +184,22 @@ class BackupStorageManager
             throw new RuntimeException("Backup file not found on disk [{$disk}]: {$storedPath}");
         }
 
-        file_put_contents($tempFile, Storage::disk($disk)->get($storedPath));
+        $readStream  = Storage::disk($disk)->readStream($storedPath);
+        $writeStream = fopen($tempFile, 'wb');
+        stream_copy_to_stream($readStream, $writeStream);
+        fclose($readStream);
+        fclose($writeStream);
+
         return $tempFile;
     }
 
     /**
      * Extract a bundle archive and return a map of component files.
      *
-     * @return array ['database' => '/tmp/path.sql.gz', 'storage' => '/tmp/path.tar.gz']
+     * @param  string  $bundlePath  Absolute path to the .tar bundle
+     * @return array   ['database' => '/tmp/path.sql.gz', 'storage' => '/tmp/path.tar.gz']
+     *
+     * @throws RuntimeException If extraction fails
      */
     public function unBundle(string $bundlePath): array
     {
@@ -150,6 +232,13 @@ class BackupStorageManager
 
     // ─── Integrity ────────────────────────────────────────────────
 
+    /**
+     * Verify the SHA-256 checksum of a file against an expected hash.
+     *
+     * @param  string  $filePath  Absolute path to the file to verify
+     * @param  string  $expected  Expected SHA-256 hex digest
+     * @return bool    true if the checksum matches
+     */
     public function verifyChecksum(string $filePath, string $expected): bool
     {
         return hash_file('sha256', $filePath) === $expected;
@@ -157,6 +246,16 @@ class BackupStorageManager
 
     // ─── Pruning ──────────────────────────────────────────────────
 
+    /**
+     * Delete backup records and their associated files that exceed the retention policy.
+     *
+     * Reads the retention period from vanguard.retention.days. Files are deleted
+     * from local and remote disks before the database record is removed.
+     * Individual deletion failures are logged as warnings and do not halt pruning.
+     *
+     * @param  string|null  $tenantId  When provided, only prune records for this tenant
+     * @return int  Number of records deleted
+     */
     public function pruneOldBackups(?string $tenantId = null): int
     {
         $days   = config('vanguard.retention.days', 30);
@@ -186,6 +285,14 @@ class BackupStorageManager
         return $deleted;
     }
 
+    /**
+     * Delete a single backup file from the appropriate disk.
+     *
+     * No-op when $path is null or the file does not exist on the disk.
+     *
+     * @param  string|null  $path    Path as stored on the disk
+     * @param  bool         $remote  Whether to use the remote disk
+     */
     protected function deleteFile(?string $path, bool $remote): void
     {
         if (! $path) return;

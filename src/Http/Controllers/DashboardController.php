@@ -15,6 +15,11 @@ class DashboardController extends Controller
 {
     /**
      * Serve the Vanguard SPA shell.
+     *
+     * Renders the minimal Blade layout that bootstraps the Vue 3 application.
+     * All data is loaded by the frontend via the JSON API.
+     *
+     * @return \Illuminate\Contracts\View\View
      */
     public function index()
     {

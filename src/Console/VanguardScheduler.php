@@ -7,8 +7,19 @@ use SoftArtisan\Vanguard\Services\TenancyResolver;
 
 class VanguardScheduler
 {
+    /**
+     * @param  TenancyResolver  $tenancy
+     */
     public function __construct(protected TenancyResolver $tenancy) {}
 
+    /**
+     * Register all Vanguard scheduled commands with the Laravel scheduler.
+     *
+     * Reads vanguard.schedule config to determine what to schedule.
+     * Does nothing when scheduling is disabled (vanguard.schedule.enabled = false).
+     *
+     * @param  Schedule  $schedule
+     */
     public function schedule(Schedule $schedule): void
     {
         if (! config('vanguard.schedule.enabled', true)) {
@@ -46,6 +57,17 @@ class VanguardScheduler
         }
     }
 
+    /**
+     * Register a single Artisan command on the scheduler with shared safety settings.
+     *
+     * All scheduled backup commands run in the background and use withoutOverlapping()
+     * to prevent concurrent executions.
+     *
+     * @param  Schedule  $schedule
+     * @param  string    $command  Artisan command string (e.g. 'vanguard:backup --landlord')
+     * @param  string    $cron     Cron expression (e.g. '0 2 * * *')
+     * @param  string    $tz       Timezone identifier (e.g. 'Europe/Paris')
+     */
     protected function scheduleCommand(Schedule $schedule, string $command, string $cron, string $tz): void
     {
         $schedule->command($command)
@@ -58,6 +80,14 @@ class VanguardScheduler
             });
     }
 
+    /**
+     * Resolve the global backup cron expression from the configured schedule frequency.
+     *
+     * Frequency maps: hourly → every hour, daily → 02:00, weekly → Sunday 02:00,
+     * monthly → 1st of the month 02:00, custom → vanguard.schedule.cron value.
+     *
+     * @return string  A valid cron expression
+     */
     protected function globalCron(): string
     {
         $frequency = config('vanguard.schedule.frequency', 'daily');
