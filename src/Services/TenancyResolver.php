@@ -41,6 +41,11 @@ class TenancyResolver
         }
 
         $model = config('vanguard.tenancy.tenant_model', \App\Models\Tenant::class);
+
+        if (! class_exists($model)) {
+            return collect();
+        }
+
         return $model::all();
     }
 
@@ -55,6 +60,11 @@ class TenancyResolver
     public function findTenant(string $tenantKey): mixed
     {
         $model = config('vanguard.tenancy.tenant_model', \App\Models\Tenant::class);
+
+        if (! class_exists($model)) {
+            throw new RuntimeException("Tenant model [{$model}] not found. Configure vanguard.tenancy.tenant_model.");
+        }
+
         return $model::findOrFail($tenantKey);
     }
 
