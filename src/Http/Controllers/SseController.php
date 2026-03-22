@@ -50,41 +50,44 @@ class SseController extends Controller
             // A fresh connection is acquired only when the next poll runs.
             DB::connection()->disconnect();
 
-            while (true) {
-                if ((time() - $started) >= $maxLifetime) {
-                    $this->sendEvent('close', ['reason' => 'max_lifetime']);
-                    break;
+            try {
+                while (true) {
+                    if ((time() - $started) >= $maxLifetime) {
+                        $this->sendEvent('close', ['reason' => 'max_lifetime']);
+                        break;
+                    }
+
+                    if (connection_aborted()) {
+                        break;
+                    }
+
+                    sleep($interval);
+
+                    // Reconnect, poll, disconnect — keeps the DB slot free during sleeps.
+                    // Inner try/finally ensures disconnect even if snapshot() throws.
+                    DB::connection()->reconnect();
+                    try {
+                        $current = $this->snapshot();
+                    } finally {
+                        DB::connection()->disconnect();
+                    }
+
+                    if ($current !== $lastSnapshot) {
+                        $this->sendEvent('vanguard', [
+                            'type'    => 'backup.updated',
+                            'stats'   => $this->quickStats(),
+                            'updated' => now()->toIso8601String(),
+                        ]);
+                        $lastSnapshot = $current;
+                    } else {
+                        $this->sendHeartbeat();
+                    }
                 }
-
-                if (connection_aborted()) {
-                    break;
-                }
-
-                sleep($interval);
-
-                // Reconnect, poll, disconnect — keeps the DB slot free during sleeps.
-                // try/finally ensures disconnect even if snapshot() throws.
+            } finally {
+                // Restore the connection for any cleanup Laravel may perform after
+                // the response — guaranteed even if an exception interrupts the loop.
                 DB::connection()->reconnect();
-                try {
-                    $current = $this->snapshot();
-                } finally {
-                    DB::connection()->disconnect();
-                }
-
-                if ($current !== $lastSnapshot) {
-                    $this->sendEvent('vanguard', [
-                        'type'    => 'backup.updated',
-                        'stats'   => $this->quickStats(),
-                        'updated' => now()->toIso8601String(),
-                    ]);
-                    $lastSnapshot = $current;
-                } else {
-                    $this->sendHeartbeat();
-                }
             }
-
-            // Restore the connection for any cleanup Laravel may perform after the response.
-            DB::connection()->reconnect();
         }, 200, $this->sseHeaders());
     }
 
@@ -104,7 +107,7 @@ class SseController extends Controller
         // Also include the ID of the most recent record to catch new backups
         $latest = BackupRecord::latest()->value('id');
 
-        return serialize([$counts, $latest]);
+        return json_encode([$counts, $latest]);
     }
 
     protected function quickStats(): array

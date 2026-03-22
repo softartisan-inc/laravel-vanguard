@@ -5,6 +5,7 @@ namespace SoftArtisan\Vanguard\Http\Controllers;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
+use Illuminate\Support\Facades\Log;
 use SoftArtisan\Vanguard\Models\BackupRecord;
 use SoftArtisan\Vanguard\Services\BackupManager;
 use SoftArtisan\Vanguard\Services\BackupStorageManager;
@@ -176,7 +177,13 @@ class BackupsApiController extends Controller
                     return response()->json(['record' => $this->formatRecord($record)]);
             }
         } catch (\Throwable $e) {
-            return response()->json(['error' => $e->getMessage()], 500);
+            Log::error('[Vanguard] Backup run failed', [
+                'type'      => $request->type,
+                'tenant_id' => $request->tenant_id,
+                'error'     => $e->getMessage(),
+                'trace'     => $e->getTraceAsString(),
+            ]);
+            return response()->json(['error' => 'Backup operation failed. Check server logs for details.'], 500);
         }
 
         return response()->json(['error' => 'Invalid type'], 422);
@@ -209,7 +216,11 @@ class BackupsApiController extends Controller
             }
             $record->delete();
         } catch (\Throwable $e) {
-            return response()->json(['error' => $e->getMessage()], 500);
+            Log::error('[Vanguard] Backup deletion failed', [
+                'backup_id' => $id,
+                'error'     => $e->getMessage(),
+            ]);
+            return response()->json(['error' => 'Failed to delete backup. Check server logs for details.'], 500);
         }
 
         return response()->json(['message' => 'Backup deleted successfully.']);
@@ -239,7 +250,12 @@ class BackupsApiController extends Controller
             ]);
             return response()->json(['message' => 'Restore completed successfully.']);
         } catch (\Throwable $e) {
-            return response()->json(['error' => $e->getMessage()], 500);
+            Log::error('[Vanguard] Restore failed', [
+                'backup_id' => $id,
+                'error'     => $e->getMessage(),
+                'trace'     => $e->getTraceAsString(),
+            ]);
+            return response()->json(['error' => 'Restore operation failed. Check server logs for details.'], 500);
         }
     }
 

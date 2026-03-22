@@ -20,7 +20,10 @@ class BackupStorageManager
     {
         $base = config('vanguard.tmp_path', storage_path('vanguard-tmp'));
         $this->sessionTmpDir = rtrim($base, '/').'/'.uniqid('vanguard_', true);
-        @mkdir($this->sessionTmpDir, 0700, true);
+
+        if (! mkdir($this->sessionTmpDir, 0700, true) && ! is_dir($this->sessionTmpDir)) {
+            throw new RuntimeException("[Vanguard] Cannot create tmp directory: {$this->sessionTmpDir}");
+        }
     }
 
     // ─── Temp File Management ─────────────────────────────────────
@@ -107,8 +110,11 @@ class BackupStorageManager
             $remoteDisk = config('vanguard.destinations.remote.disk', 's3');
             $remotePath = config('vanguard.destinations.remote.path', 'vanguard-backups')."/{$name}.tar";
             $stream = fopen($bundlePath, 'rb');
-            Storage::disk($remoteDisk)->put($remotePath, $stream);
+            $ok = Storage::disk($remoteDisk)->put($remotePath, $stream);
             fclose($stream);
+            if (! $ok) {
+                throw new RuntimeException("[Vanguard] Failed to write backup to remote disk [{$remoteDisk}]: {$remotePath}");
+            }
             $result['remote_path'] = $remotePath;
         }
 
@@ -117,8 +123,11 @@ class BackupStorageManager
             $ftpDisk = config('vanguard.destinations.ftp.disk', 'ftp');
             $ftpPath = config('vanguard.destinations.ftp.path', 'vanguard-backups')."/{$name}.tar";
             $stream  = fopen($bundlePath, 'rb');
-            Storage::disk($ftpDisk)->put($ftpPath, $stream);
+            $ok = Storage::disk($ftpDisk)->put($ftpPath, $stream);
             fclose($stream);
+            if (! $ok) {
+                throw new RuntimeException("[Vanguard] Failed to write backup to FTP disk [{$ftpDisk}]: {$ftpPath}");
+            }
             $result['ftp_path'] = $ftpPath;
         }
 

@@ -315,6 +315,6 @@ class DashboardTest extends TestCase
 
         $this->postJson("/vanguard/api/backups/{$record->id}/restore")
             ->assertStatus(500)
-            ->assertJson(['error' => 'Checksum mismatch']);
+            ->assertJson(['error' => 'Restore operation failed. Check server logs for details.']);
     }
 }

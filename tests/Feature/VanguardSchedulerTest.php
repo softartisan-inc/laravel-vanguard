@@ -63,11 +63,21 @@ class VanguardSchedulerTest extends TestCase
         $pendingMock->shouldReceive('runInBackground')->once()->andReturnSelf();
         $pendingMock->shouldReceive('onFailure')->once()->andReturnSelf();
 
+        $cleanupPendingMock = Mockery::mock();
+        $cleanupPendingMock->shouldReceive('hourly')->once()->andReturnSelf();
+        $cleanupPendingMock->shouldReceive('timezone')->once()->andReturnSelf();
+        $cleanupPendingMock->shouldReceive('withoutOverlapping')->once()->andReturnSelf();
+        $cleanupPendingMock->shouldReceive('runInBackground')->once()->andReturnSelf();
+
         $schedule = Mockery::mock(Schedule::class);
         $schedule->shouldReceive('command')
             ->once()
             ->with('vanguard:backup --landlord')
             ->andReturn($pendingMock);
+        $schedule->shouldReceive('command')
+            ->once()
+            ->with('vanguard:cleanup-tmp')
+            ->andReturn($cleanupPendingMock);
 
         $scheduler = new VanguardScheduler($tenancy);
         $scheduler->schedule($schedule);
@@ -101,6 +111,12 @@ class VanguardSchedulerTest extends TestCase
         $pendingMock->shouldReceive('runInBackground')->twice()->andReturnSelf();
         $pendingMock->shouldReceive('onFailure')->twice()->andReturnSelf();
 
+        $cleanupPendingMock = Mockery::mock();
+        $cleanupPendingMock->shouldReceive('hourly')->once()->andReturnSelf();
+        $cleanupPendingMock->shouldReceive('timezone')->once()->andReturnSelf();
+        $cleanupPendingMock->shouldReceive('withoutOverlapping')->once()->andReturnSelf();
+        $cleanupPendingMock->shouldReceive('runInBackground')->once()->andReturnSelf();
+
         $schedule = Mockery::mock(Schedule::class);
         $schedule->shouldReceive('command')
             ->with('vanguard:backup --tenant=acme')
@@ -110,6 +126,10 @@ class VanguardSchedulerTest extends TestCase
             ->with('vanguard:backup --tenant=globex')
             ->once()
             ->andReturn($pendingMock);
+        $schedule->shouldReceive('command')
+            ->once()
+            ->with('vanguard:cleanup-tmp')
+            ->andReturn($cleanupPendingMock);
 
         $scheduler = new VanguardScheduler($tenancy);
         $scheduler->schedule($schedule);
@@ -145,10 +165,19 @@ class VanguardSchedulerTest extends TestCase
         $pendingMock->shouldReceive('runInBackground')->andReturnSelf();
         $pendingMock->shouldReceive('onFailure')->andReturnSelf();
 
+        $cleanupPendingMock = Mockery::mock();
+        $cleanupPendingMock->shouldReceive('hourly')->andReturnSelf();
+        $cleanupPendingMock->shouldReceive('timezone')->andReturnSelf();
+        $cleanupPendingMock->shouldReceive('withoutOverlapping')->andReturnSelf();
+        $cleanupPendingMock->shouldReceive('runInBackground')->andReturnSelf();
+
         $schedule = Mockery::mock(Schedule::class);
         $schedule->shouldReceive('command')
             ->with('vanguard:backup --tenant=vip')
             ->andReturn($pendingMock);
+        $schedule->shouldReceive('command')
+            ->with('vanguard:cleanup-tmp')
+            ->andReturn($cleanupPendingMock);
 
         $scheduler = new VanguardScheduler($tenancy);
         $scheduler->schedule($schedule);
@@ -197,11 +226,21 @@ class VanguardSchedulerTest extends TestCase
         $pendingMock->shouldReceive('withoutOverlapping')->once()->andReturnSelf();
         $pendingMock->shouldReceive('runInBackground')->once()->andReturnSelf();
 
+        $cleanupPendingMock = Mockery::mock();
+        $cleanupPendingMock->shouldReceive('hourly')->once()->andReturnSelf();
+        $cleanupPendingMock->shouldReceive('timezone')->once()->andReturnSelf();
+        $cleanupPendingMock->shouldReceive('withoutOverlapping')->once()->andReturnSelf();
+        $cleanupPendingMock->shouldReceive('runInBackground')->once()->andReturnSelf();
+
         $schedule = Mockery::mock(Schedule::class);
         $schedule->shouldReceive('command')
             ->once()
             ->with('vanguard:prune')
             ->andReturn($pendingMock);
+        $schedule->shouldReceive('command')
+            ->once()
+            ->with('vanguard:cleanup-tmp')
+            ->andReturn($cleanupPendingMock);
 
         $scheduler = new VanguardScheduler($tenancy);
         $scheduler->schedule($schedule);

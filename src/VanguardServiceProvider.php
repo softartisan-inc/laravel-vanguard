@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
 use SoftArtisan\Vanguard\Commands\VanguardBackupCommand;
+use SoftArtisan\Vanguard\Commands\VanguardCleanupTmpCommand;
 use SoftArtisan\Vanguard\Commands\VanguardRestoreCommand;
 use SoftArtisan\Vanguard\Commands\VanguardListCommand;
 use SoftArtisan\Vanguard\Commands\VanguardPruneCommand;
@@ -153,6 +154,7 @@ class VanguardServiceProvider extends ServiceProvider
             VanguardRestoreCommand::class,
             VanguardListCommand::class,
             VanguardPruneCommand::class,
+            VanguardCleanupTmpCommand::class,
         ]);
     }
 
