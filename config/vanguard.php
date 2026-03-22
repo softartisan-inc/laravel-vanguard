@@ -156,12 +156,26 @@ return [
     | Queue
     |--------------------------------------------------------------------------
     | Dispatch backup jobs to a queue instead of running synchronously.
+    |
+    | IMPORTANT — worker timeout: your queue worker (Horizon or artisan queue:work)
+    | must have a timeout >= VANGUARD_QUEUE_TIMEOUT, otherwise the worker will kill
+    | long-running backups before they complete.
+    |
+    | Horizon example (config/horizon.php):
+    |   'vanguard' => [
+    |       'connection' => env('VANGUARD_QUEUE_CONNECTION', 'redis'),
+    |       'queue'      => [env('VANGUARD_QUEUE_NAME', 'vanguard')],
+    |       'balance'    => 'auto',
+    |       'processes'  => 2,
+    |       'tries'      => 3,
+    |       'timeout'    => env('VANGUARD_QUEUE_TIMEOUT', 3600),
+    |   ],
     */
     'queue' => [
         'enabled'    => env('VANGUARD_QUEUE_ENABLED', true),
         'connection' => env('VANGUARD_QUEUE_CONNECTION', null),
         'queue'      => env('VANGUARD_QUEUE_NAME', 'vanguard'),
-        'timeout'    => 3600,
+        'timeout'    => env('VANGUARD_QUEUE_TIMEOUT', 3600),
     ],
 
     /*

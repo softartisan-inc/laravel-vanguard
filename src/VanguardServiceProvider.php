@@ -79,6 +79,7 @@ class VanguardServiceProvider extends ServiceProvider
         $this->registerViews();
         $this->registerMigrations();
         $this->registerScheduler();
+        $this->validateDestinationDisks();
     }
 
     /**
@@ -204,6 +205,35 @@ class VanguardServiceProvider extends ServiceProvider
     {
         if (Vanguard::$runsMigrations) {
             $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
+        }
+    }
+
+    /**
+     * Warn at boot time when an enabled destination references an undeclared Flysystem disk.
+     *
+     * This surfaces misconfiguration early (boot log) rather than failing silently
+     * at backup time. Only checks destinations explicitly enabled in config.
+     */
+    protected function validateDestinationDisks(): void
+    {
+        $checks = [
+            'remote' => 'vanguard.destinations.remote',
+            'ftp'    => 'vanguard.destinations.ftp',
+        ];
+
+        foreach ($checks as $label => $configKey) {
+            if (! config("{$configKey}.enabled", false)) {
+                continue;
+            }
+
+            $disk = config("{$configKey}.disk");
+
+            if (empty(config("filesystems.disks.{$disk}"))) {
+                \Illuminate\Support\Facades\Log::warning(
+                    "[Vanguard] The {$label} destination is enabled but disk [{$disk}] is not declared "
+                    ."in config/filesystems.php. Backups will fail until this is resolved."
+                );
+            }
         }
     }
 

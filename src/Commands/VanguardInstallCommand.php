@@ -28,22 +28,114 @@ class VanguardInstallCommand extends Command
         $this->call('vendor:publish', ['--tag' => 'vanguard-migrations', '--force' => false]);
         $this->call('migrate', ['--force' => $this->option('no-interaction')]);
 
+        $this->checkDestinationDisks();
+
         $this->newLine();
         $this->info('✅ Vanguard installed successfully!');
         $this->newLine();
-        $this->line('📋 Next steps:');
-        $this->line('   1. Review <comment>config/vanguard.php</comment> and set your backup destinations.');
-        $this->line('   2. Add your auth gate in <comment>AppServiceProvider::boot()</comment>:');
-        $this->line('      <comment>Vanguard::auth(fn ($request) => $request->user()?->isAdmin());</comment>');
-        $this->line('   3. Visit <comment>'.url(config('vanguard.path', 'vanguard')).'</comment> to access the dashboard.');
-        $this->newLine();
-        $this->line('⚡ <comment>Production tip:</comment> publish assets so nginx/Apache serves them directly');
-        $this->line('   (avoids any PHP overhead on asset requests):');
-        $this->line('   <comment>php artisan vendor:publish --tag=vanguard-assets</comment>');
-        $this->newLine();
-        $this->line('📖 Documentation: https://github.com/softartisan/vanguard');
+        $this->printNextSteps();
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Print actionable next steps after installation.
+     */
+    protected function printNextSteps(): void
+    {
+        $timeout = (int) config('vanguard.queue.timeout', 3600);
+        $queue   = config('vanguard.queue.queue', 'vanguard');
+        $conn    = config('vanguard.queue.connection') ?? 'redis';
+
+        $this->line('📋 <comment>Next steps:</comment>');
+        $this->newLine();
+
+        $this->line('  <info>1. Auth gate</info> — restrict dashboard access in <comment>AppServiceProvider::boot()</comment>:');
+        $this->line('     <comment>Vanguard::auth(fn ($request) => $request->user()?->isAdmin());</comment>');
+        $this->newLine();
+
+        $this->line('  <info>2. Scheduler</info> — required for automatic backups, pruning, and tmp cleanup.');
+        $this->line('     Add to your server crontab:');
+        $this->line('     <comment>* * * * * php '.base_path('artisan').' schedule:run >> /dev/null 2>&1</comment>');
+        $this->newLine();
+
+        $this->line('  <info>3. Queue worker / Horizon</info> — worker timeout must be ≥ VANGUARD_QUEUE_TIMEOUT.');
+        $this->line("     Add the <comment>{$queue}</comment> supervisor to <comment>config/horizon.php</comment>:");
+        $this->line("     <comment>'{$queue}' => [</comment>");
+        $this->line("     <comment>    'connection' => '{$conn}',</comment>");
+        $this->line("     <comment>    'queue'      => ['{$queue}'],</comment>");
+        $this->line("     <comment>    'balance'    => 'auto',</comment>");
+        $this->line("     <comment>    'processes'  => 2,</comment>");
+        $this->line("     <comment>    'tries'      => 3,</comment>");
+        $this->line("     <comment>    'timeout'    => {$timeout},</comment>");
+        $this->line("     <comment>],</comment>");
+        $this->newLine();
+
+        $this->line('  <info>4. FTP/SFTP destination</info> — if you plan to use VANGUARD_FTP_ENABLED=true:');
+        $this->line('     Install the adapter:');
+        $this->line('       FTP:  <comment>composer require league/flysystem-ftp</comment>');
+        $this->line('       SFTP: <comment>composer require league/flysystem-sftp-v3</comment>');
+        $this->line('     Declare the disk in <comment>config/filesystems.php</comment>:');
+        $this->line("     <comment>'ftp' => [</comment>");
+        $this->line("     <comment>    'driver'   => 'ftp',  // or 'sftp'</comment>");
+        $this->line("     <comment>    'host'     => env('FTP_HOST'),</comment>");
+        $this->line("     <comment>    'username' => env('FTP_USERNAME'),</comment>");
+        $this->line("     <comment>    'password' => env('FTP_PASSWORD'),</comment>");
+        $this->line("     <comment>    'port'     => 21,</comment>");
+        $this->line("     <comment>],</comment>");
+        $this->newLine();
+
+        $this->line('  <info>5. Environment variables</info> — add to <comment>.env</comment> as needed:');
+        $this->line('     <comment>VANGUARD_QUEUE_CONNECTION=redis</comment>');
+        $this->line('     <comment>VANGUARD_QUEUE_NAME=vanguard</comment>');
+        $this->line('     <comment>VANGUARD_QUEUE_TIMEOUT=3600</comment>');
+        $this->line('     <comment>VANGUARD_RETENTION_DAYS=30</comment>');
+        $this->line('     # Remote (S3):');
+        $this->line('     <comment>VANGUARD_REMOTE_ENABLED=false</comment>');
+        $this->line('     <comment>VANGUARD_REMOTE_DISK=s3</comment>');
+        $this->line('     <comment>VANGUARD_REMOTE_PATH=vanguard-backups</comment>');
+        $this->line('     # FTP/SFTP:');
+        $this->line('     <comment>VANGUARD_FTP_ENABLED=false</comment>');
+        $this->line('     <comment>VANGUARD_FTP_DISK=ftp</comment>');
+        $this->line('     <comment>VANGUARD_FTP_PATH=vanguard-backups</comment>');
+        $this->newLine();
+
+        $this->line('  <info>6. Assets</info> — publish so nginx/Apache serves them directly:');
+        $this->line('     <comment>php artisan vendor:publish --tag=vanguard-assets</comment>');
+        $this->newLine();
+
+        $this->line('  Visit <comment>'.url(config('vanguard.path', 'vanguard')).'</comment> to access the dashboard.');
+        $this->line('  📖 Documentation: https://github.com/softartisan/vanguard');
+        $this->newLine();
+    }
+
+    /**
+     * Verify that any enabled destination references a declared Flysystem disk.
+     *
+     * Runs after publishing config so we read the app's actual filesystems config.
+     * Prints a warning (not an error) so installation is not blocked — the user
+     * may configure the disk immediately after.
+     */
+    protected function checkDestinationDisks(): void
+    {
+        $destinations = [
+            'remote' => 'vanguard.destinations.remote',
+            'ftp'    => 'vanguard.destinations.ftp',
+        ];
+
+        foreach ($destinations as $label => $key) {
+            if (! config("{$key}.enabled", false)) {
+                continue;
+            }
+
+            $disk = config("{$key}.disk");
+
+            if (empty(config("filesystems.disks.{$disk}"))) {
+                $this->newLine();
+                $this->warn("⚠  The {$label} destination is enabled but disk [{$disk}] is not declared in config/filesystems.php.");
+                $this->warn("   Add the disk configuration before running backups (see step 4 of next steps).");
+            }
+        }
     }
 
     /**
