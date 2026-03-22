@@ -176,18 +176,20 @@ return [
     | Controls how the dashboard receives live updates.
     |
     | driver:
-    |   'sse'     — Server-Sent Events (recommended). One persistent connection,
-    |               server pushes updates only when backup state changes.
-    |               Zero overhead when nothing is happening.
-    |   'polling' — Interval-based fetch. Use as fallback or behind proxies
-    |               that don't support streaming responses.
+    |   'polling' — Interval-based fetch (default). Compatible with all server
+    |               setups including php artisan serve and single-process servers.
+    |   'sse'     — Server-Sent Events. One persistent connection, server pushes
+    |               updates only when backup state changes. Zero overhead when
+    |               nothing is happening. Requires a multi-process server
+    |               (nginx + php-fpm, Octane, etc.) — incompatible with
+    |               php artisan serve (single-process).
     |
     | interval:     Polling interval in seconds (only used when driver = 'polling')
     | sse_interval: How often the SSE endpoint checks the DB for changes (seconds)
     | max_lifetime: Max SSE connection lifetime before client auto-reconnects (seconds)
     */
     'realtime' => [
-        'driver'        => env('VANGUARD_REALTIME_DRIVER', 'sse'),
+        'driver'        => env('VANGUARD_REALTIME_DRIVER', 'polling'),
         'interval'      => env('VANGUARD_POLL_INTERVAL', 5),
         'sse_interval'  => env('VANGUARD_SSE_INTERVAL', 2),
         'max_lifetime'  => env('VANGUARD_SSE_LIFETIME', 120),
