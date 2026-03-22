@@ -22,7 +22,7 @@
     id="vanguard-app"
     data-base-path="{{ rtrim(Vanguard::path(), '/') }}"
     data-csrf-token="{{ csrf_token() }}"
-    data-realtime-driver="{{ config('vanguard.realtime.driver', 'sse') }}"
+    data-realtime-driver="{{ config('vanguard.realtime.driver', 'polling') }}"
     data-poll-interval="{{ config('vanguard.realtime.interval', 5) }}"
 ></div>
 

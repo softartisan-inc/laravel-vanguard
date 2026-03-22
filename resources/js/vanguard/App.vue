@@ -91,7 +91,7 @@ import { useToast }    from './composables/useToast.js'
 const props = defineProps({
   basePath:       { type: String, required: true },
   csrfToken:      { type: String, required: true },
-  realtimeDriver: { type: String, default: 'sse' },
+  realtimeDriver: { type: String, default: 'polling' },
   pollInterval:   { type: Number, default: 5 },
 })
 
