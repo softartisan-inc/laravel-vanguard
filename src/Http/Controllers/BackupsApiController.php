@@ -149,6 +149,7 @@ class BackupsApiController extends Controller
                 case 'landlord':
                     if (config('vanguard.queue.enabled', true)) {
                         \SoftArtisan\Vanguard\Jobs\RunTenantBackupJob::dispatch('__landlord__', [])
+                            ->onConnection(config('vanguard.queue.connection'))
                             ->onQueue(config('vanguard.queue.queue', 'vanguard'));
                         return response()->json(['message' => 'Landlord backup queued.', 'queued' => true]);
                     }
@@ -159,6 +160,7 @@ class BackupsApiController extends Controller
                     $tenant = $this->tenancy->findTenant($request->tenant_id);
                     if (config('vanguard.queue.enabled', true)) {
                         \SoftArtisan\Vanguard\Jobs\RunTenantBackupJob::dispatch($request->tenant_id)
+                            ->onConnection(config('vanguard.queue.connection'))
                             ->onQueue(config('vanguard.queue.queue', 'vanguard'));
                         return response()->json(['message' => 'Tenant backup queued.', 'queued' => true]);
                     }
@@ -201,6 +203,10 @@ class BackupsApiController extends Controller
                 $disk = config('vanguard.destinations.remote.disk', 's3');
                 \Illuminate\Support\Facades\Storage::disk($disk)->delete($record->remote_path);
             }
+            if ($record->ftp_path) {
+                $disk = config('vanguard.destinations.ftp.disk', 'ftp');
+                \Illuminate\Support\Facades\Storage::disk($disk)->delete($record->ftp_path);
+            }
             $record->delete();
         } catch (\Throwable $e) {
             return response()->json(['error' => $e->getMessage()], 500);
@@ -229,6 +235,7 @@ class BackupsApiController extends Controller
                 'verify_checksum' => $request->boolean('verify_checksum', true),
                 'restore_db'      => $request->boolean('restore_db', true),
                 'restore_storage' => $request->boolean('restore_storage', false),
+                'source'          => $request->input('source', 'local'),
             ]);
             return response()->json(['message' => 'Restore completed successfully.']);
         } catch (\Throwable $e) {
@@ -256,6 +263,7 @@ class BackupsApiController extends Controller
             'duration'      => $r->duration,
             'checksum'      => $r->checksum,
             'destinations'  => $r->destinations,
+            'ftp_path'      => $r->ftp_path,
             'error'         => $r->error,
             'started_at'    => $r->started_at?->toIso8601String(),
             'completed_at'  => $r->completed_at?->toIso8601String(),

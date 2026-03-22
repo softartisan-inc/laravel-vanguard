@@ -30,35 +30,39 @@ class RestoreService
      *
      * @param  BackupRecord  $record
      * @param  array  $options  Supported keys:
-     *                          - 'verify_checksum' (bool) — default true
-     *                          - 'restore_db'      (bool) — default true
-     *                          - 'restore_storage' (bool) — default false (opt-in, destructive)
-     *                          - 'use_remote'      (bool) — default false
+     *                          - 'verify_checksum' (bool)   — default true
+     *                          - 'restore_db'      (bool)   — default true
+     *                          - 'restore_storage' (bool)   — default false (opt-in, destructive)
+     *                          - 'source'          (string) — 'local' | 'remote' | 'ftp', default 'local'
      * @return bool  true on success
      *
      * @throws RuntimeException
      */
     public function restore(BackupRecord $record, array $options = []): bool
     {
-        $verify          = $options['verify_checksum'] ?? true;
-        $restoreDb       = $options['restore_db']      ?? true;
-        $restoreStorage  = $options['restore_storage'] ?? false; // opt-in: dangerous
-        $useRemote       = $options['use_remote']      ?? false;
+        $verify         = $options['verify_checksum'] ?? true;
+        $restoreDb      = $options['restore_db']      ?? true;
+        $restoreStorage = $options['restore_storage'] ?? false; // opt-in: dangerous
+        $destination    = $options['source']          ?? 'local'; // 'local' | 'remote' | 'ftp'
 
         if ($record->isFailed() || $record->isRunning()) {
             throw new RuntimeException("Cannot restore a backup with status [{$record->status}].");
         }
 
-        $storedPath = $useRemote ? $record->remote_path : $record->file_path;
+        $storedPath = match ($destination) {
+            'remote' => $record->remote_path,
+            'ftp'    => $record->ftp_path,
+            default  => $record->file_path,
+        };
 
         if (! $storedPath) {
-            throw new RuntimeException("No file path available for backup #{$record->id}.");
+            throw new RuntimeException("No file path available for backup #{$record->id} on destination [{$destination}].");
         }
 
         try {
             Log::info('[Vanguard] Starting restore', ['record_id' => $record->id]);
 
-            $bundlePath = $this->store->download($storedPath, $useRemote);
+            $bundlePath = $this->store->download($storedPath, $destination);
 
             // Integrity check
             if ($verify && $record->checksum) {

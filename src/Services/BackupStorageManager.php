@@ -65,7 +65,7 @@ class BackupStorageManager
      *
      * @param  array   $files  ['database' => '/tmp/...sql.gz', 'storage' => '/tmp/...tar.gz']
      * @param  string  $name   Base name for the archive
-     * @return array   ['local_path' => string|null, 'remote_path' => string|null, 'size' => int, 'checksum' => string]
+     * @return array   ['local_path' => string|null, 'remote_path' => string|null, 'ftp_path' => string|null, 'size' => int, 'checksum' => string]
      */
     public function bundle(array $files, string $name): array
     {
@@ -99,7 +99,7 @@ class BackupStorageManager
 
         $checksum = hash_file('sha256', $bundlePath);
         $size     = filesize($bundlePath);
-        $result   = ['size' => $size, 'checksum' => $checksum, 'local_path' => null, 'remote_path' => null];
+        $result   = ['size' => $size, 'checksum' => $checksum, 'local_path' => null, 'remote_path' => null, 'ftp_path' => null];
 
         // Remote first — stream while bundlePath is still on disk.
         // Flysystem's S3 adapter automatically uses multipart upload for large streams.
@@ -110,6 +110,16 @@ class BackupStorageManager
             Storage::disk($remoteDisk)->put($remotePath, $stream);
             fclose($stream);
             $result['remote_path'] = $remotePath;
+        }
+
+        // FTP/SFTP — stream after remote so bundlePath is still available.
+        if (config('vanguard.destinations.ftp.enabled', false)) {
+            $ftpDisk = config('vanguard.destinations.ftp.disk', 'ftp');
+            $ftpPath = config('vanguard.destinations.ftp.path', 'vanguard-backups')."/{$name}.tar";
+            $stream  = fopen($bundlePath, 'rb');
+            Storage::disk($ftpDisk)->put($ftpPath, $stream);
+            fclose($stream);
+            $result['ftp_path'] = $ftpPath;
         }
 
         // Local last — attempt zero-copy rename(); fall back to stream if needed.
@@ -166,17 +176,19 @@ class BackupStorageManager
     /**
      * Download a stored backup archive into the session tmp directory.
      *
-     * @param  string  $storedPath  Path on disk as recorded in the BackupRecord
-     * @param  bool    $remote      Whether to read from the remote disk instead of local
+     * @param  string  $storedPath   Path on disk as recorded in the BackupRecord
+     * @param  string  $destination  Which destination to read from: 'local' | 'remote' | 'ftp'
      * @return string  Absolute path to the downloaded file in the tmp directory
      *
      * @throws RuntimeException If the file does not exist on the disk
      */
-    public function download(string $storedPath, bool $remote = false): string
+    public function download(string $storedPath, string $destination = 'local'): string
     {
-        $disk = $remote
-            ? config('vanguard.destinations.remote.disk', 's3')
-            : config('vanguard.destinations.local.disk', 'local');
+        $disk = match ($destination) {
+            'remote' => config('vanguard.destinations.remote.disk', 's3'),
+            'ftp'    => config('vanguard.destinations.ftp.disk', 'ftp'),
+            default  => config('vanguard.destinations.local.disk', 'local'),
+        };
 
         $tempFile = $this->tmpPath(basename($storedPath));
 
@@ -273,8 +285,9 @@ class BackupStorageManager
 
         foreach ($records as $record) {
             try {
-                $this->deleteFile($record->file_path, false);
-                $this->deleteFile($record->remote_path, true);
+                $this->deleteFile($record->file_path, 'local');
+                $this->deleteFile($record->remote_path, 'remote');
+                $this->deleteFile($record->ftp_path, 'ftp');
                 $record->delete();
                 $deleted++;
             } catch (\Throwable $e) {
@@ -290,16 +303,18 @@ class BackupStorageManager
      *
      * No-op when $path is null or the file does not exist on the disk.
      *
-     * @param  string|null  $path    Path as stored on the disk
-     * @param  bool         $remote  Whether to use the remote disk
+     * @param  string|null  $path         Path as stored on the disk
+     * @param  string       $destination  Which destination to target: 'local' | 'remote' | 'ftp'
      */
-    protected function deleteFile(?string $path, bool $remote): void
+    protected function deleteFile(?string $path, string $destination): void
     {
         if (! $path) return;
 
-        $disk = $remote
-            ? config('vanguard.destinations.remote.disk', 's3')
-            : config('vanguard.destinations.local.disk', 'local');
+        $disk = match ($destination) {
+            'remote' => config('vanguard.destinations.remote.disk', 's3'),
+            'ftp'    => config('vanguard.destinations.ftp.disk', 'ftp'),
+            default  => config('vanguard.destinations.local.disk', 'local'),
+        };
 
         if (Storage::disk($disk)->exists($path)) {
             Storage::disk($disk)->delete($path);

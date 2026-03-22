@@ -65,7 +65,14 @@ return [
     |--------------------------------------------------------------------------
     | 'local'  — stores backups on the server disk.
     | 'remote' — stores backups on a configured Laravel filesystem disk (e.g. s3).
-    | Both can be enabled simultaneously.
+    | 'ftp'    — stores backups on an FTP or SFTP disk (any Flysystem FTP/SFTP adapter).
+    |
+    | Multiple destinations can be enabled simultaneously. The backup file is
+    | streamed to each enabled destination in the order: remote → ftp → local.
+    |
+    | For FTP/SFTP, configure a disk in config/filesystems.php using the
+    | league/flysystem-ftp or league/flysystem-sftp-v3 adapter, then set
+    | VANGUARD_FTP_DISK to that disk name.
     */
     'destinations' => [
         'local' => [
@@ -77,6 +84,11 @@ return [
             'enabled' => env('VANGUARD_REMOTE_ENABLED', false),
             'disk'    => env('VANGUARD_REMOTE_DISK', 's3'),
             'path'    => env('VANGUARD_REMOTE_PATH', 'vanguard-backups'),
+        ],
+        'ftp' => [
+            'enabled' => env('VANGUARD_FTP_ENABLED', false),
+            'disk'    => env('VANGUARD_FTP_DISK', 'ftp'),
+            'path'    => env('VANGUARD_FTP_PATH', 'vanguard-backups'),
         ],
     ],
 
