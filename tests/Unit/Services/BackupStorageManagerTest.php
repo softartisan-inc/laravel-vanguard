@@ -122,6 +122,73 @@ class BackupStorageManagerTest extends TestCase
         $this->manager->bundle(['database' => '/nonexistent/file.sql.gz'], 'bad_backup');
     }
 
+    /** @test */
+    public function bundle_stores_to_ftp_disk_when_ftp_enabled(): void
+    {
+        Storage::fake('ftp');
+
+        config(['vanguard.destinations.local.enabled'  => false]);
+        config(['vanguard.destinations.remote.enabled' => false]);
+        config(['vanguard.destinations.ftp.enabled'    => true]);
+        config(['vanguard.destinations.ftp.disk'       => 'ftp']);
+        config(['vanguard.destinations.ftp.path'       => 'backups']);
+
+        $dbDump = $this->manager->tmpPath('dump_ftp.sql.gz');
+        file_put_contents($dbDump, gzencode('-- SQL ftp'));
+
+        $result = $this->manager->bundle(['database' => $dbDump], 'test_ftp_001');
+
+        $this->assertNotNull($result['ftp_path']);
+        $this->assertNull($result['local_path']);
+        $this->assertNull($result['remote_path']);
+
+        Storage::disk('ftp')->assertExists($result['ftp_path']);
+    }
+
+    /** @test */
+    public function bundle_stores_to_all_three_destinations_when_all_enabled(): void
+    {
+        Storage::fake('s3');
+        Storage::fake('ftp');
+
+        config(['vanguard.destinations.local.enabled'  => true]);
+        config(['vanguard.destinations.remote.enabled' => true]);
+        config(['vanguard.destinations.remote.disk'    => 's3']);
+        config(['vanguard.destinations.remote.path'    => 'backups']);
+        config(['vanguard.destinations.ftp.enabled'    => true]);
+        config(['vanguard.destinations.ftp.disk'       => 'ftp']);
+        config(['vanguard.destinations.ftp.path'       => 'backups']);
+
+        $dbDump = $this->manager->tmpPath('dump_all.sql.gz');
+        file_put_contents($dbDump, gzencode('-- SQL all'));
+
+        $result = $this->manager->bundle(['database' => $dbDump], 'test_all_001');
+
+        $this->assertNotNull($result['local_path']);
+        $this->assertNotNull($result['remote_path']);
+        $this->assertNotNull($result['ftp_path']);
+
+        Storage::disk('local')->assertExists($result['local_path']);
+        Storage::disk('s3')->assertExists($result['remote_path']);
+        Storage::disk('ftp')->assertExists($result['ftp_path']);
+    }
+
+    /** @test */
+    public function bundle_ftp_path_is_null_when_ftp_disabled(): void
+    {
+        config(['vanguard.destinations.local.enabled'  => true]);
+        config(['vanguard.destinations.remote.enabled' => false]);
+        config(['vanguard.destinations.ftp.enabled'    => false]);
+
+        $dbDump = $this->manager->tmpPath('dump_no_ftp.sql.gz');
+        file_put_contents($dbDump, gzencode('-- SQL'));
+
+        $result = $this->manager->bundle(['database' => $dbDump], 'test_no_ftp_001');
+
+        $this->assertNull($result['ftp_path']);
+        $this->assertNotNull($result['local_path']);
+    }
+
     // ─────────────────────────────────────────────────────────────
     // download
     // ─────────────────────────────────────────────────────────────
@@ -133,10 +200,51 @@ class BackupStorageManagerTest extends TestCase
 
         Storage::disk('local')->put('vanguard-backups/mybackup.tar', 'fake-tar-content');
 
-        $tmpFile = $this->manager->download('vanguard-backups/mybackup.tar', false);
+        $tmpFile = $this->manager->download('vanguard-backups/mybackup.tar', 'local');
 
         $this->assertFileExists($tmpFile);
         $this->assertSame('fake-tar-content', file_get_contents($tmpFile));
+    }
+
+    /** @test */
+    public function download_defaults_to_local_disk_when_no_destination_given(): void
+    {
+        config(['vanguard.destinations.local.disk' => 'local']);
+
+        Storage::disk('local')->put('vanguard-backups/default.tar', 'default-content');
+
+        $tmpFile = $this->manager->download('vanguard-backups/default.tar');
+
+        $this->assertFileExists($tmpFile);
+        $this->assertSame('default-content', file_get_contents($tmpFile));
+    }
+
+    /** @test */
+    public function download_copies_file_from_remote_disk_when_destination_is_remote(): void
+    {
+        Storage::fake('s3');
+        config(['vanguard.destinations.remote.disk' => 's3']);
+
+        Storage::disk('s3')->put('vanguard-backups/remote.tar', 's3-content');
+
+        $tmpFile = $this->manager->download('vanguard-backups/remote.tar', 'remote');
+
+        $this->assertFileExists($tmpFile);
+        $this->assertSame('s3-content', file_get_contents($tmpFile));
+    }
+
+    /** @test */
+    public function download_copies_file_from_ftp_disk_when_destination_is_ftp(): void
+    {
+        Storage::fake('ftp');
+        config(['vanguard.destinations.ftp.disk' => 'ftp']);
+
+        Storage::disk('ftp')->put('vanguard-backups/ftp.tar', 'ftp-content');
+
+        $tmpFile = $this->manager->download('vanguard-backups/ftp.tar', 'ftp');
+
+        $this->assertFileExists($tmpFile);
+        $this->assertSame('ftp-content', file_get_contents($tmpFile));
     }
 
     /** @test */
@@ -145,7 +253,19 @@ class BackupStorageManagerTest extends TestCase
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessageMatches('/Backup file not found/');
 
-        $this->manager->download('vanguard-backups/nonexistent.tar', false);
+        $this->manager->download('vanguard-backups/nonexistent.tar', 'local');
+    }
+
+    /** @test */
+    public function download_throws_when_file_not_found_on_ftp_disk(): void
+    {
+        Storage::fake('ftp');
+        config(['vanguard.destinations.ftp.disk' => 'ftp']);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessageMatches('/Backup file not found on disk \[ftp\]/');
+
+        $this->manager->download('vanguard-backups/nonexistent.tar', 'ftp');
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -231,6 +351,32 @@ class BackupStorageManagerTest extends TestCase
     }
 
     /** @test */
+    public function prune_deletes_ftp_file_when_ftp_path_is_set(): void
+    {
+        Storage::fake('ftp');
+
+        config(['vanguard.retention.days' => 7]);
+        config(['vanguard.destinations.ftp.disk' => 'ftp']);
+
+        $ftpPath = 'vanguard-backups/old_ftp.tar';
+        Storage::disk('ftp')->put($ftpPath, 'ftp-data');
+
+        $old = $this->makeRecord([
+            'status'   => 'completed',
+            'ftp_path' => $ftpPath,
+            'file_path' => null,
+        ]);
+        \Illuminate\Support\Facades\DB::table('vanguard_backups')
+            ->where('id', $old->id)
+            ->update(['created_at' => now()->subDays(10)]);
+
+        $deleted = $this->manager->pruneOldBackups();
+
+        $this->assertSame(1, $deleted);
+        Storage::disk('ftp')->assertMissing($ftpPath);
+    }
+
+    /** @test */
     public function prune_can_filter_by_tenant_id(): void
     {
         config(['vanguard.retention.days' => 1]);
@@ -270,7 +416,7 @@ class BackupStorageManagerTest extends TestCase
         );
 
         // Download & unbundle
-        $bundlePath = $this->manager->download($result['local_path'], false);
+        $bundlePath = $this->manager->download($result['local_path'], 'local');
         $components = $this->manager->unBundle($bundlePath);
 
         $this->assertArrayHasKey('database', $components);

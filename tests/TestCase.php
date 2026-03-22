@@ -59,6 +59,11 @@ abstract class TestCase extends Orchestra
                 'disk'    => 's3',
                 'path'    => 'vanguard-backups',
             ],
+            'ftp' => [
+                'enabled' => false,
+                'disk'    => 'ftp',
+                'path'    => 'vanguard-backups',
+            ],
         ]);
 
         $app['config']->set('vanguard.retention', [
