@@ -67,9 +67,10 @@ export function useRealtime(onEvent) {
     connected.value = true
     // Caller is responsible for what to do on each tick.
     // We just emit a generic 'poll' event so the page can refresh.
+    const interval = (Number(pollInterval) || 10) * 1000
     _timer = setInterval(() => {
       onEvent({ type: 'poll' })
-    }, pollInterval * 1000)
+    }, interval)
   }
 
   function stopPolling() {
