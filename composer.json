@@ -1,5 +1,5 @@
 {
-    "name": "softartisan/vanguard",
+    "name": "softartisan/laravel-vanguard",
     "description": "A powerful, multi-tenant aware backup manager for Laravel with stancl/tenancy v3 support — with a beautiful dashboard.",
     "type": "library",
     "license": "MIT",
