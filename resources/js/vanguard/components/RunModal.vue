@@ -39,21 +39,29 @@
 
 <script setup>
 import { ref } from 'vue'
+import { useBackups } from '../composables/useBackups.js'
+import { useToast }   from '../composables/useToast.js'
 
-// running est géré par le parent (App.vue) pour éviter await emit()
-defineProps({
-  running: { type: Boolean, default: false },
-})
+const emit = defineEmits(['close', 'success'])
 
-const emit = defineEmits(['close', 'run'])
+const { runBackup } = useBackups()
+const toast = useToast()
 
 const type     = ref('landlord')
 const tenantId = ref('')
+const running  = ref(false)
 
-function submit() {
-  emit('run', {
-    type:     type.value,
-    tenantId: type.value === 'tenant' ? tenantId.value : null,
-  })
+async function submit() {
+  running.value = true
+  try {
+    const res = await runBackup(type.value, type.value === 'tenant' ? tenantId.value : null)
+    toast.success(res.queued ? 'Backup queued.' : 'Backup started.')
+    emit('close')
+    emit('success')
+  } catch (e) {
+    toast.error(e.message)
+  } finally {
+    running.value = false
+  }
 }
 </script>
