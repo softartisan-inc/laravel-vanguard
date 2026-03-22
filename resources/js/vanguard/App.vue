@@ -40,8 +40,8 @@
             {{ rtConnected ? '⏸ Pause' : '▶ Resume' }}
           </button>
 
-          <button class="btn btn-ghost" @click="refresh" :disabled="loading">
-            <span :class="{ spinning: loading }">↻</span> Refresh
+          <button class="btn btn-ghost" @click="refresh" >
+            <span >↻</span> Refresh
           </button>
 
           <button class="btn btn-primary" @click="showRunModal = true">
@@ -63,9 +63,8 @@
     <!-- Run modal -->
     <RunModal
       v-if="showRunModal"
-      :running="modalRunning"
       @close="showRunModal = false"
-      @run="handleRun"
+      @success="() => setTimeout(refresh, 1500)"
     />
 
     <!-- Global toasts -->
@@ -84,7 +83,7 @@ import VToast     from './components/VToast.vue'
 import RealtimeIndicator from './components/RealtimeIndicator.vue'
 
 import { useRealtime } from './composables/useRealtime.js'
-import { useBackups }  from './composables/useBackups.js'
+
 import { useToast }    from './composables/useToast.js'
 
 // ── Props from Blade data attributes ─────────────────────────
@@ -120,7 +119,7 @@ function navigate(page) {
 }
 
 // ── Refresh current page ──────────────────────────────────────
-const { loading } = useBackups()
+
 
 function refresh() {
   pageRef.value?.refresh?.()
@@ -128,23 +127,6 @@ function refresh() {
 
 // ── Run backup modal ──────────────────────────────────────────
 const showRunModal = ref(false)
-const modalRunning  = ref(false)
-const toast = useToast()
-const { runBackup } = useBackups()
-
-async function handleRun({ type, tenantId }) {
-  modalRunning.value = true
-  try {
-    const res = await runBackup(type, tenantId)
-    toast.success(res.queued ? 'Backup queued.' : 'Backup started.')
-    showRunModal.value = false
-    setTimeout(refresh, 1500)
-  } catch (e) {
-    toast.error(e.message)
-  } finally {
-    modalRunning.value = false
-  }
-}
 
 // ── Realtime ──────────────────────────────────────────────────
 const { connected: rtConnected, driver: rtDriver, startRealtime, stopRealtime } = useRealtime(onRealtimeEvent)
