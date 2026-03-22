@@ -1,0 +1,12 @@
+# <type>(<scope>): <description>   ← 72 chars max
+#
+# Types: feat | fix | docs | style | refactor | perf | test | chore | ci | revert | security
+# Scope (optional): backup | restore | api | dashboard | scheduler | tenancy | install
+# Add "!" after type/scope for breaking changes: feat!: ...
+#
+# Body (optional — wrap at 72 chars):
+#
+#
+# Footer (optional):
+# Closes #<issue>
+# BREAKING CHANGE: <description>

@@ -1,0 +1,29 @@
+# Files and directories listed here are excluded from `git archive`
+# and therefore from the Packagist / Composer distribution tarball.
+#
+# Rule: ship only what is needed at runtime.
+# - public/vanguard.js and public/vanguard.css are compiled and MUST be included.
+# - Source files, tests, and tooling are development-only and are excluded.
+
+# ─── Development tooling ─────────────────────────────────────────────────────
+.github/            export-ignore
+.githooks/          export-ignore
+.gitattributes      export-ignore
+.gitmessage         export-ignore
+.tool-versions      export-ignore
+cliff.toml          export-ignore
+CLAUDE.md           export-ignore
+scripts/            export-ignore
+
+# ─── Frontend source (compiled output in public/ is what ships) ───────────────
+resources/js/       export-ignore
+resources/css/      export-ignore
+node_modules/       export-ignore
+package.json        export-ignore
+pnpm-lock.yaml      export-ignore
+vite.config.js      export-ignore
+
+# ─── Tests ────────────────────────────────────────────────────────────────────
+tests/              export-ignore
+phpunit.xml         export-ignore
+phpunit.xml.dist    export-ignore
