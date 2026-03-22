@@ -21,6 +21,7 @@ class BackupRecord extends Model
         'destinations',
         'file_path',
         'remote_path',
+        'ftp_path',
         'file_size',
         'checksum',
         'error',
@@ -189,6 +190,11 @@ class BackupRecord extends Model
             if ($this->remote_path && config('vanguard.destinations.remote.enabled', false)) {
                 Storage::disk(config('vanguard.destinations.remote.disk', 's3'))
                     ->delete($this->remote_path);
+            }
+
+            if ($this->ftp_path && config('vanguard.destinations.ftp.enabled', false)) {
+                Storage::disk(config('vanguard.destinations.ftp.disk', 'ftp'))
+                    ->delete($this->ftp_path);
             }
         } catch (\Throwable $e) {
             \Illuminate\Support\Facades\Log::warning(

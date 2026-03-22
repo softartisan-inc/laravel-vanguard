@@ -298,6 +298,7 @@ class BackupManager
             'destinations' => array_keys(array_filter([
                 'local'  => config('vanguard.destinations.local.enabled'),
                 'remote' => config('vanguard.destinations.remote.enabled'),
+                'ftp'    => config('vanguard.destinations.ftp.enabled'),
             ])),
             'meta' => $meta,
         ]);
@@ -315,6 +316,7 @@ class BackupManager
             'status'       => 'completed',
             'file_path'    => $bundle['local_path'],
             'remote_path'  => $bundle['remote_path'],
+            'ftp_path'     => $bundle['ftp_path'],
             'file_size'    => $bundle['size'],
             'checksum'     => $bundle['checksum'],
             'completed_at' => now(),

@@ -29,7 +29,9 @@
     },
     "suggest": {
         "stancl/tenancy": "Required for multi-tenant backup support (^3.0)",
-        "league/flysystem-aws-s3-v3": "Required for S3 remote backup storage"
+        "league/flysystem-aws-s3-v3": "Required for S3 remote backup storage",
+        "league/flysystem-ftp": "Required for FTP backup destination (VANGUARD_FTP_ENABLED=true)",
+        "league/flysystem-sftp-v3": "Required for SFTP backup destination (VANGUARD_FTP_ENABLED=true)"
     },
     "autoload": {
         "psr-4": {

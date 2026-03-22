@@ -55,6 +55,14 @@ class VanguardScheduler
                 ->withoutOverlapping()
                 ->runInBackground();
         }
+
+        // ─── Orphaned tmp cleanup ──────────────────────────────────
+        // Removes session tmp dirs left by crashed workers (older than 6 hours).
+        $schedule->command('vanguard:cleanup-tmp')
+            ->hourly()
+            ->timezone($tz)
+            ->withoutOverlapping()
+            ->runInBackground();
     }
 
     /**

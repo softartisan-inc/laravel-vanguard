@@ -15,10 +15,11 @@ return new class extends Migration
             $table->string('status');     // pending | running | completed | failed
 
             $table->json('sources')->nullable();       // ['database', 'filesystem']
-            $table->json('destinations')->nullable();  // ['local', 'remote']
+            $table->json('destinations')->nullable();  // ['local', 'remote', 'ftp']
 
             $table->string('file_path')->nullable();   // Local relative path
-            $table->string('remote_path')->nullable(); // Remote disk path
+            $table->string('remote_path')->nullable(); // Remote disk path (e.g. S3)
+            $table->string('ftp_path')->nullable();    // FTP/SFTP disk path
             $table->unsignedBigInteger('file_size')->nullable();
             $table->string('checksum', 64)->nullable(); // SHA-256
 

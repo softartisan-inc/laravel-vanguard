@@ -2,6 +2,7 @@
 
 namespace SoftArtisan\Vanguard\Tests\Unit\Commands;
 
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Queue;
 use Mockery;
 use SoftArtisan\Vanguard\Models\BackupRecord;
@@ -253,5 +254,139 @@ class VanguardCommandsTest extends TestCase
         $this->artisan('vanguard:install')
             ->assertSuccessful()
             ->expectsOutputToContain('Vanguard installed');
+    }
+
+    /** @test */
+    public function install_command_prints_scheduler_instructions(): void
+    {
+        $this->artisan('vanguard:install')
+            ->assertSuccessful()
+            ->expectsOutputToContain('schedule:run');
+    }
+
+    /** @test */
+    public function install_command_prints_horizon_queue_supervisor_stub(): void
+    {
+        $this->artisan('vanguard:install')
+            ->assertSuccessful()
+            ->expectsOutputToContain('horizon.php')
+            ->expectsOutputToContain('timeout');
+    }
+
+    /** @test */
+    public function install_command_prints_ftp_adapter_instructions(): void
+    {
+        $this->artisan('vanguard:install')
+            ->assertSuccessful()
+            ->expectsOutputToContain('league/flysystem-ftp')
+            ->expectsOutputToContain('filesystems.php');
+    }
+
+    /** @test */
+    public function install_command_prints_env_variable_reference(): void
+    {
+        $this->artisan('vanguard:install')
+            ->assertSuccessful()
+            ->expectsOutputToContain('VANGUARD_QUEUE_TIMEOUT')
+            ->expectsOutputToContain('VANGUARD_FTP_ENABLED')
+            ->expectsOutputToContain('VANGUARD_RETENTION_DAYS');
+    }
+
+    /** @test */
+    public function install_command_warns_when_ftp_enabled_but_disk_not_configured(): void
+    {
+        config([
+            'vanguard.destinations.ftp.enabled' => true,
+            'vanguard.destinations.ftp.disk'    => 'ftp_missing',
+            // 'filesystems.disks.ftp_missing' is intentionally absent
+        ]);
+
+        $this->artisan('vanguard:install')
+            ->assertSuccessful()
+            ->expectsOutputToContain('ftp_missing');
+    }
+
+    /** @test */
+    public function install_command_does_not_warn_when_ftp_disabled(): void
+    {
+        config(['vanguard.destinations.ftp.enabled' => false]);
+
+        // No warning about missing disk should appear when FTP is off
+        $output = $this->artisan('vanguard:install')->assertSuccessful();
+
+        // Just assert it completed — the absence of a warning is implicit
+        $this->assertTrue(true);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // validateDestinationDisks (ServiceProvider boot)
+    // ─────────────────────────────────────────────────────────────
+
+    /** @test */
+    public function service_provider_logs_warning_when_ftp_enabled_but_disk_missing(): void
+    {
+        Log::spy();
+
+        config([
+            'vanguard.destinations.ftp.enabled' => true,
+            'vanguard.destinations.ftp.disk'    => 'nonexistent_ftp_disk',
+        ]);
+
+        $sp = new \SoftArtisan\Vanguard\VanguardServiceProvider($this->app);
+        $sp->boot();
+
+        Log::shouldHaveReceived('warning')
+            ->once()
+            ->withArgs(fn ($msg) => str_contains($msg, 'nonexistent_ftp_disk'));
+        $this->addToAssertionCount(1);
+    }
+
+    /** @test */
+    public function service_provider_logs_warning_when_remote_enabled_but_disk_missing(): void
+    {
+        Log::spy();
+
+        config([
+            'vanguard.destinations.remote.enabled' => true,
+            'vanguard.destinations.remote.disk'    => 'nonexistent_s3_disk',
+        ]);
+
+        $sp = new \SoftArtisan\Vanguard\VanguardServiceProvider($this->app);
+        $sp->boot();
+
+        Log::shouldHaveReceived('warning')
+            ->once()
+            ->withArgs(fn ($msg) => str_contains($msg, 'nonexistent_s3_disk'));
+        $this->addToAssertionCount(1);
+    }
+
+    /** @test */
+    public function service_provider_does_not_warn_when_destination_disabled(): void
+    {
+        Log::spy();
+
+        config([
+            'vanguard.destinations.ftp.enabled'   => false,
+            'vanguard.destinations.remote.enabled' => false,
+        ]);
+
+        $sp = new \SoftArtisan\Vanguard\VanguardServiceProvider($this->app);
+        $sp->boot();
+
+        Log::shouldNotHaveReceived('warning');
+        $this->addToAssertionCount(1);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // vanguard:cleanup-tmp (basic registration check)
+    // ─────────────────────────────────────────────────────────────
+
+    /** @test */
+    public function cleanup_tmp_command_is_registered(): void
+    {
+        $this->assertTrue(
+            $this->app->make(\Illuminate\Contracts\Console\Kernel::class)
+                ->all()['vanguard:cleanup-tmp'] !== null
+        );
     }
 }

@@ -7,6 +7,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Log;
 use SoftArtisan\Vanguard\Services\BackupManager;
 use SoftArtisan\Vanguard\Services\TenancyResolver;
 
@@ -14,8 +15,17 @@ class RunTenantBackupJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public int $timeout = 3600;
-    public int $tries   = 1;
+    /**
+     * Timeout read from config at dispatch time so it can be overridden per environment.
+     * Falls back to 3600 s (1 hour) if the config key is absent.
+     */
+    public int $timeout;
+
+    /**
+     * Three attempts: handles transient network/DB failures without retrying forever.
+     * Each attempt is spaced by the backoff() method below.
+     */
+    public int $tries = 3;
 
     /**
      * Create a new job instance.
@@ -26,7 +36,9 @@ class RunTenantBackupJob implements ShouldQueue
     public function __construct(
         public readonly string $tenantId,
         public readonly array  $options = [],
-    ) {}
+    ) {
+        $this->timeout = (int) config('vanguard.queue.timeout', 3600);
+    }
 
     /**
      * Execute the job.
@@ -47,6 +59,29 @@ class RunTenantBackupJob implements ShouldQueue
 
         $tenant = $tenancy->findTenant($this->tenantId);
         $manager->backupTenant($tenant, $this->options);
+    }
+
+    /**
+     * Exponential backoff: 60 s, 300 s, 900 s between attempts.
+     *
+     * @return array<int, int>
+     */
+    public function backoff(): array
+    {
+        return [60, 300, 900];
+    }
+
+    /**
+     * Called by Laravel after all attempts are exhausted.
+     * Logs a final error so operators can be alerted via log monitoring.
+     */
+    public function failed(\Throwable $e): void
+    {
+        Log::error('[Vanguard] Backup job failed permanently after all retries', [
+            'tenant_id' => $this->tenantId,
+            'error'     => $e->getMessage(),
+            'attempts'  => $this->attempts(),
+        ]);
     }
 
     /**
