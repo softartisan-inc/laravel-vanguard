@@ -221,4 +221,28 @@ return [
         'max_lifetime'  => env('VANGUARD_SSE_LIFETIME', 120),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Binary Paths
+    |--------------------------------------------------------------------------
+    | Absolute paths to the CLI tools used during backup and restore.
+    | Leave null to let Vanguard auto-detect from common system locations
+    | (/usr/bin, /usr/local/bin, etc.).
+    |
+    | Set explicitly when the binary is not in the PATH of your web/queue
+    | process (common in Docker, shared hosting, or custom server setups).
+    |
+    | Examples:
+    |   VANGUARD_MYSQLDUMP_BINARY=/usr/bin/mysqldump
+    |   VANGUARD_MYSQL_BINARY=/usr/bin/mysql
+    |   VANGUARD_PG_DUMP_BINARY=/usr/bin/pg_dump
+    |   VANGUARD_PSQL_BINARY=/usr/bin/psql
+    */
+    'binaries' => [
+        'mysqldump' => env('VANGUARD_MYSQLDUMP_BINARY', null),
+        'mysql'     => env('VANGUARD_MYSQL_BINARY',     null),
+        'pg_dump'   => env('VANGUARD_PG_DUMP_BINARY',   null),
+        'psql'      => env('VANGUARD_PSQL_BINARY',       null),
+    ],
+
 ];

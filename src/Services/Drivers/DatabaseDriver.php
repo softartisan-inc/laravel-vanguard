@@ -69,20 +69,39 @@ class DatabaseDriver
     // ─── MySQL / MariaDB ─────────────────────────────────────────
 
     /**
-     * Dump a MySQL/MariaDB database to a gzipped SQL file via mysqldump.
+     * Dump a MySQL/MariaDB database to a gzipped SQL file.
      *
-     * Uses MYSQL_PWD environment variable to pass the password securely.
+     * Prefers the mysqldump CLI when available (faster, handles edge cases).
+     * Falls back to a PHP/PDO-based dump when mysqldump is not installed,
+     * which is common in Docker or minimal server environments.
      *
      * @param  array   $c     Laravel MySQL connection config
      * @param  string  $dest  Absolute destination path (.sql.gz)
      */
     protected function dumpMysql(array $c, string $dest): void
     {
+        $binary = $this->resolveBinary('mysqldump');
+
+        if ($this->binaryAvailable($binary)) {
+            $this->dumpMysqlViaCli($c, $dest, $binary);
+        } else {
+            $this->dumpMysqlViaPdo($c, $dest);
+        }
+    }
+
+    /**
+     * Dump MySQL via the mysqldump CLI binary.
+     *
+     * Uses MYSQL_PWD environment variable to pass the password securely.
+     */
+    protected function dumpMysqlViaCli(array $c, string $dest, string $binary): void
+    {
         $this->setMysqlPasswordEnv($c);
 
         try {
             $cmd = sprintf(
-                'mysqldump %s %s 2>&1 | gzip > %s',
+                '%s %s %s 2>&1 | gzip > %s',
+                escapeshellcmd($binary),
                 $this->mysqlConnectionArgs($c),
                 escapeshellarg($c['database']),
                 escapeshellarg($dest),
@@ -91,6 +110,83 @@ class DatabaseDriver
             $this->exec($cmd, 'mysqldump');
         } finally {
             $this->clearMysqlPasswordEnv();
+        }
+    }
+
+    /**
+     * Dump MySQL via PDO — no binary required.
+     *
+     * Exports schema (CREATE TABLE) and data (INSERT) for every table.
+     * Output is written directly to a gzip stream, avoiding large temp files.
+     *
+     * @param  array   $c     Laravel MySQL connection config
+     * @param  string  $dest  Absolute destination path (.sql.gz)
+     *
+     * @throws RuntimeException On PDO or gzip errors
+     */
+    protected function dumpMysqlViaPdo(array $c, string $dest): void
+    {
+        $dsn = sprintf(
+            'mysql:host=%s;port=%s;dbname=%s;charset=%s',
+            $c['host']     ?? '127.0.0.1',
+            $c['port']     ?? 3306,
+            $c['database'],
+            $c['charset']  ?? 'utf8mb4',
+        );
+
+        $pdo = new \PDO($dsn, $c['username'] ?? 'root', $c['password'] ?? '', [
+            \PDO::ATTR_ERRMODE            => \PDO::ERRMODE_EXCEPTION,
+            \PDO::ATTR_DEFAULT_FETCH_MODE => \PDO::FETCH_ASSOC,
+        ]);
+
+        $gz = @gzopen($dest, 'wb9');
+        if ($gz === false) {
+            throw new RuntimeException("Cannot open gzip destination: {$dest}");
+        }
+
+        try {
+            $db = $c['database'];
+
+            gzwrite($gz, "-- Vanguard MySQL dump (PDO fallback)\n");
+            gzwrite($gz, "-- Database: {$db}\n");
+            gzwrite($gz, "-- Generated: ".now()->toIso8601String()."\n\n");
+            gzwrite($gz, "SET FOREIGN_KEY_CHECKS=0;\n\n");
+
+            $tables = $pdo->query('SHOW TABLES')->fetchAll(\PDO::FETCH_COLUMN);
+
+            foreach ($tables as $table) {
+                // Schema
+                $create = $pdo->query("SHOW CREATE TABLE `{$table}`")->fetch();
+                gzwrite($gz, "DROP TABLE IF EXISTS `{$table}`;\n");
+                gzwrite($gz, $create['Create Table'].";\n\n");
+
+                // Data — stream row by row to limit memory usage
+                $rows = $pdo->query("SELECT * FROM `{$table}`");
+                $count = 0;
+
+                foreach ($rows as $row) {
+                    $values = array_map(
+                        fn ($v) => $v === null ? 'NULL' : $pdo->quote((string) $v),
+                        $row,
+                    );
+
+                    gzwrite($gz, "INSERT INTO `{$table}` VALUES (".implode(',', $values).");\n");
+                    $count++;
+
+                    // Flush every 500 rows to avoid large write buffers
+                    if ($count % 500 === 0) {
+                        gzwrite($gz, "\n");
+                    }
+                }
+
+                if ($count > 0) {
+                    gzwrite($gz, "\n");
+                }
+            }
+
+            gzwrite($gz, "SET FOREIGN_KEY_CHECKS=1;\n");
+        } finally {
+            gzclose($gz);
         }
     }
 
@@ -108,8 +204,9 @@ class DatabaseDriver
 
         try {
             $cmd = sprintf(
-                'gunzip -c %s | mysql %s %s 2>&1',
+                'gunzip -c %s | %s %s %s 2>&1',
                 escapeshellarg($src),
+                escapeshellcmd($this->resolveBinary('mysql')),
                 $this->mysqlConnectionArgs($c),
                 escapeshellarg($c['database']),
             );
@@ -191,8 +288,9 @@ class DatabaseDriver
     protected function dumpPgsql(array $c, string $dest): void
     {
         $cmd = sprintf(
-            '%s pg_dump --format=plain --no-acl --no-owner -h %s -p %s -U %s %s 2>&1 | gzip > %s',
+            '%s %s --format=plain --no-acl --no-owner -h %s -p %s -U %s %s 2>&1 | gzip > %s',
             $this->pgPasswordEnv($c),
+            escapeshellcmd($this->resolveBinary('pg_dump')),
             escapeshellarg($c['host'] ?? '127.0.0.1'),
             escapeshellarg((string) ($c['port'] ?? 5432)),
             escapeshellarg($c['username']),
@@ -214,9 +312,10 @@ class DatabaseDriver
     protected function restorePgsql(array $c, string $src): void
     {
         $cmd = sprintf(
-            '%s gunzip -c %s | psql -h %s -p %s -U %s -d %s 2>&1',
+            '%s gunzip -c %s | %s -h %s -p %s -U %s -d %s 2>&1',
             $this->pgPasswordEnv($c),
             escapeshellarg($src),
+            escapeshellcmd($this->resolveBinary('psql')),
             escapeshellarg($c['host'] ?? '127.0.0.1'),
             escapeshellarg((string) ($c['port'] ?? 5432)),
             escapeshellarg($c['username']),
@@ -325,5 +424,62 @@ class DatabaseDriver
                 "[Vanguard:{$label}] Command failed (exit {$exitCode}):\n".implode("\n", $output)
             );
         }
+    }
+
+    /**
+     * Check whether a binary is actually executable on this system.
+     *
+     * @param  string  $binary  Resolved binary path or bare name
+     * @return bool
+     */
+    protected function binaryAvailable(string $binary): bool
+    {
+        // Absolute path — check directly
+        if (str_starts_with($binary, '/')) {
+            return file_exists($binary) && is_executable($binary);
+        }
+
+        // Bare name — probe via `which` (POSIX) or `where` (Windows)
+        exec('which '.escapeshellarg($binary).' 2>/dev/null', $out, $code);
+
+        return $code === 0 && ! empty($out[0]);
+    }
+
+    /**
+     * Resolve the absolute path for a CLI binary.
+     *
+     * Resolution order:
+     *   1. Explicit path from config('vanguard.binaries.<name>')
+     *   2. Auto-detection from common system locations
+     *   3. Fall back to the bare binary name (relies on PATH)
+     *
+     * @param  string  $binary  Binary name: 'mysqldump', 'mysql', 'pg_dump', 'psql'
+     * @return string           Absolute path or bare name
+     */
+    protected function resolveBinary(string $binary): string
+    {
+        // 1. Explicit config override
+        $configured = config("vanguard.binaries.{$binary}");
+        if ($configured && file_exists($configured) && is_executable($configured)) {
+            return $configured;
+        }
+
+        // 2. Auto-detect from common locations
+        $commonPaths = [
+            "/usr/bin/{$binary}",
+            "/usr/local/bin/{$binary}",
+            "/usr/mysql/bin/{$binary}",
+            "/opt/homebrew/bin/{$binary}",  // macOS Apple Silicon
+            "/usr/local/mysql/bin/{$binary}",
+        ];
+
+        foreach ($commonPaths as $path) {
+            if (file_exists($path) && is_executable($path)) {
+                return $path;
+            }
+        }
+
+        // 3. Bare name — relies on the process PATH
+        return $binary;
     }
 }

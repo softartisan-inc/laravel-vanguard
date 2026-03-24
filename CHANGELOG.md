@@ -7,6 +7,15 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
+## [1.1.0] — 2026-03-24
+
+### Added
+- **IoC extension guide**: documented how to swap `BackupManager`, `DatabaseDriver`, `StorageDriver`, `TenancyResolver`, and `VanguardScheduler` via the Laravel container, including a note on why `BackupManager` must remain transient (`bind`, not `singleton`).
+- **Per-tenant schedule customization**: documented the `vanguard_schedule` column approach and the `TenancyResolver::tenantSchedule()` override pattern (e.g. UTC-adjusted cron from tenant timezone).
+- **Multiple landlord schedules**: documented how to extend `VanguardScheduler` to register several independent cron entries for the landlord (e.g. nightly DB-only + weekly full backup).
+
+---
+
 ## [1.0.0] — 2026-03-18
 
 ### Added
