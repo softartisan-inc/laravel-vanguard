@@ -5,6 +5,7 @@ namespace SoftArtisan\Vanguard\Tests\Unit\Commands;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Queue;
 use Mockery;
+use PHPUnit\Framework\Attributes\Test;
 use SoftArtisan\Vanguard\Models\BackupRecord;
 use SoftArtisan\Vanguard\Services\BackupManager;
 use SoftArtisan\Vanguard\Services\BackupStorageManager;
@@ -24,7 +25,7 @@ class VanguardCommandsTest extends TestCase
     // vanguard:backup
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function backup_command_without_flags_shows_error(): void
     {
         $this->artisan('vanguard:backup')
@@ -32,7 +33,7 @@ class VanguardCommandsTest extends TestCase
             ->expectsOutput('Please specify a backup target: --landlord, --tenant=ID, --all-tenants, or --filesystem');
     }
 
-    /** @test */
+    #[Test]
     public function backup_landlord_flag_calls_backup_manager(): void
     {
         $manager = Mockery::mock(BackupManager::class);
@@ -47,7 +48,7 @@ class VanguardCommandsTest extends TestCase
             ->assertSuccessful();
     }
 
-    /** @test */
+    #[Test]
     public function backup_filesystem_flag_calls_backup_filesystem(): void
     {
         $manager = Mockery::mock(BackupManager::class);
@@ -61,7 +62,7 @@ class VanguardCommandsTest extends TestCase
             ->assertSuccessful();
     }
 
-    /** @test */
+    #[Test]
     public function backup_all_tenants_flag_calls_backup_all_tenants(): void
     {
         config(['vanguard.tenancy.enabled' => true]);
@@ -86,7 +87,7 @@ class VanguardCommandsTest extends TestCase
             ->assertSuccessful();
     }
 
-    /** @test */
+    #[Test]
     public function backup_tenant_flag_with_disabled_tenancy_returns_failure(): void
     {
         config(['vanguard.tenancy.enabled' => false]);
@@ -104,7 +105,7 @@ class VanguardCommandsTest extends TestCase
     // vanguard:list
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function list_command_shows_no_records_message_when_empty(): void
     {
         $this->artisan('vanguard:list')
@@ -112,7 +113,7 @@ class VanguardCommandsTest extends TestCase
             ->expectsOutput('No backup records found.');
     }
 
-    /** @test */
+    #[Test]
     public function list_command_shows_table_with_existing_records(): void
     {
         $this->makeRecord(['status' => 'completed', 'type' => 'landlord']);
@@ -122,7 +123,7 @@ class VanguardCommandsTest extends TestCase
             ->assertSuccessful();
     }
 
-    /** @test */
+    #[Test]
     public function list_command_filters_by_tenant(): void
     {
         $this->makeRecord(['tenant_id' => 'acme',   'status' => 'completed']);
@@ -135,7 +136,7 @@ class VanguardCommandsTest extends TestCase
         $this->assertCount(1, BackupRecord::forTenant('acme')->get());
     }
 
-    /** @test */
+    #[Test]
     public function list_command_filters_by_status(): void
     {
         $this->makeRecord(['status' => 'completed']);
@@ -149,7 +150,7 @@ class VanguardCommandsTest extends TestCase
     // vanguard:prune
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function prune_command_delegates_to_storage_manager(): void
     {
         $store = Mockery::mock(BackupStorageManager::class);
@@ -165,7 +166,7 @@ class VanguardCommandsTest extends TestCase
             ->expectsOutputToContain('5');
     }
 
-    /** @test */
+    #[Test]
     public function prune_command_passes_tenant_id_when_given(): void
     {
         $store = Mockery::mock(BackupStorageManager::class);
@@ -180,7 +181,7 @@ class VanguardCommandsTest extends TestCase
             ->assertSuccessful();
     }
 
-    /** @test */
+    #[Test]
     public function prune_command_overrides_retention_days_when_given(): void
     {
         $store = Mockery::mock(BackupStorageManager::class);
@@ -198,7 +199,7 @@ class VanguardCommandsTest extends TestCase
     // vanguard:restore
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function restore_command_fails_when_record_not_found(): void
     {
         $this->artisan('vanguard:restore 9999 --force')
@@ -206,7 +207,7 @@ class VanguardCommandsTest extends TestCase
             ->expectsOutput('Backup record [9999] not found.');
     }
 
-    /** @test */
+    #[Test]
     public function restore_command_calls_restore_service_with_force(): void
     {
         $record = $this->makeRecord(['status' => 'completed', 'file_path' => 'path/to/backup.tar']);
@@ -227,7 +228,7 @@ class VanguardCommandsTest extends TestCase
             ->expectsOutputToContain('Restore completed');
     }
 
-    /** @test */
+    #[Test]
     public function restore_command_reports_failure_on_exception(): void
     {
         $record = $this->makeRecord(['status' => 'completed', 'file_path' => 'path.tar']);
@@ -244,11 +245,87 @@ class VanguardCommandsTest extends TestCase
             ->expectsOutputToContain('Disk error');
     }
 
+    #[Test]
+    public function restore_command_refuses_wipe_storage_without_restore_storage(): void
+    {
+        $record = $this->makeRecord(['status' => 'completed', 'file_path' => 'path.tar']);
+
+        $restoreService = Mockery::mock(RestoreService::class);
+        $restoreService->shouldNotReceive('restore');
+
+        $this->app->instance(RestoreService::class, $restoreService);
+
+        $this->artisan("vanguard:restore {$record->id} --wipe-storage --force")
+            ->assertExitCode(1)
+            ->expectsOutputToContain('--restore-storage');
+    }
+
+    #[Test]
+    public function restore_command_asks_a_second_confirmation_naming_the_directories_it_will_erase(): void
+    {
+        config(['vanguard.sources.filesystem_paths' => ['app']]);
+
+        $record = $this->makeRecord(['status' => 'completed', 'file_path' => 'path.tar']);
+
+        $restoreService = Mockery::mock(RestoreService::class);
+        $restoreService->shouldReceive('backedUpPaths')->andReturn([storage_path('app')]);
+        $restoreService->shouldNotReceive('restore');
+
+        $this->app->instance(RestoreService::class, $restoreService);
+
+        $this->artisan("vanguard:restore {$record->id} --restore-storage --wipe-storage")
+            ->expectsConfirmation('Do you want to proceed?', 'yes')
+            ->expectsOutputToContain(storage_path('app'))
+            ->expectsConfirmation('Erase those directories and replace them with the backup content?', 'no')
+            ->expectsOutputToContain('Restore cancelled.')
+            ->assertSuccessful();
+    }
+
+    #[Test]
+    public function restore_command_passes_wipe_storage_to_the_service_when_confirmed(): void
+    {
+        $record = $this->makeRecord(['status' => 'completed', 'file_path' => 'path.tar']);
+
+        $restoreService = Mockery::mock(RestoreService::class);
+        $restoreService->shouldReceive('restore')
+            ->once()
+            ->with(
+                Mockery::on(fn ($r) => $r->id === $record->id),
+                Mockery::on(fn ($o) => $o['restore_storage'] === true && $o['wipe_storage'] === true),
+            )
+            ->andReturn(true);
+
+        $this->app->instance(RestoreService::class, $restoreService);
+
+        $this->artisan("vanguard:restore {$record->id} --restore-storage --wipe-storage --force")
+            ->assertSuccessful();
+    }
+
+    #[Test]
+    public function restore_command_does_not_wipe_storage_by_default(): void
+    {
+        $record = $this->makeRecord(['status' => 'completed', 'file_path' => 'path.tar']);
+
+        $restoreService = Mockery::mock(RestoreService::class);
+        $restoreService->shouldReceive('restore')
+            ->once()
+            ->with(
+                Mockery::any(),
+                Mockery::on(fn ($o) => $o['wipe_storage'] === false),
+            )
+            ->andReturn(true);
+
+        $this->app->instance(RestoreService::class, $restoreService);
+
+        $this->artisan("vanguard:restore {$record->id} --restore-storage --force")
+            ->assertSuccessful();
+    }
+
     // ─────────────────────────────────────────────────────────────
     // vanguard:install
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function install_command_runs_successfully(): void
     {
         $this->artisan('vanguard:install')
@@ -256,7 +333,7 @@ class VanguardCommandsTest extends TestCase
             ->expectsOutputToContain('Vanguard installed');
     }
 
-    /** @test */
+    #[Test]
     public function install_command_prints_scheduler_instructions(): void
     {
         $this->artisan('vanguard:install')
@@ -264,7 +341,7 @@ class VanguardCommandsTest extends TestCase
             ->expectsOutputToContain('schedule:run');
     }
 
-    /** @test */
+    #[Test]
     public function install_command_prints_horizon_queue_supervisor_stub(): void
     {
         $this->artisan('vanguard:install')
@@ -273,7 +350,7 @@ class VanguardCommandsTest extends TestCase
             ->expectsOutputToContain('timeout');
     }
 
-    /** @test */
+    #[Test]
     public function install_command_prints_ftp_adapter_instructions(): void
     {
         $this->artisan('vanguard:install')
@@ -282,7 +359,7 @@ class VanguardCommandsTest extends TestCase
             ->expectsOutputToContain('filesystems.php');
     }
 
-    /** @test */
+    #[Test]
     public function install_command_prints_env_variable_reference(): void
     {
         $this->artisan('vanguard:install')
@@ -292,7 +369,7 @@ class VanguardCommandsTest extends TestCase
             ->expectsOutputToContain('VANGUARD_RETENTION_DAYS');
     }
 
-    /** @test */
+    #[Test]
     public function install_command_warns_when_ftp_enabled_but_disk_not_configured(): void
     {
         config([
@@ -306,7 +383,7 @@ class VanguardCommandsTest extends TestCase
             ->expectsOutputToContain('ftp_missing');
     }
 
-    /** @test */
+    #[Test]
     public function install_command_does_not_warn_when_ftp_disabled(): void
     {
         config(['vanguard.destinations.ftp.enabled' => false]);
@@ -322,7 +399,7 @@ class VanguardCommandsTest extends TestCase
     // validateDestinationDisks (ServiceProvider boot)
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function service_provider_logs_warning_when_ftp_enabled_but_disk_missing(): void
     {
         Log::spy();
@@ -341,7 +418,7 @@ class VanguardCommandsTest extends TestCase
         $this->addToAssertionCount(1);
     }
 
-    /** @test */
+    #[Test]
     public function service_provider_logs_warning_when_remote_enabled_but_disk_missing(): void
     {
         Log::spy();
@@ -360,7 +437,7 @@ class VanguardCommandsTest extends TestCase
         $this->addToAssertionCount(1);
     }
 
-    /** @test */
+    #[Test]
     public function service_provider_does_not_warn_when_destination_disabled(): void
     {
         Log::spy();
@@ -381,7 +458,7 @@ class VanguardCommandsTest extends TestCase
     // vanguard:cleanup-tmp (basic registration check)
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function cleanup_tmp_command_is_registered(): void
     {
         $this->assertTrue(

@@ -33,6 +33,8 @@ class RestoreService
      *                          - 'verify_checksum' (bool)   — default true
      *                          - 'restore_db'      (bool)   — default true
      *                          - 'restore_storage' (bool)   — default false (opt-in, destructive)
+     *                          - 'wipe_storage'    (bool)   — default false; replace instead of merge,
+     *                            see wipeBackedUpPaths() for the exact scope erased
      *                          - 'source'          (string) — 'local' | 'remote' | 'ftp'; omit it to
      *                            read from the first destination the backup actually reached
      * @return bool  true on success
@@ -44,6 +46,7 @@ class RestoreService
         $verify         = $options['verify_checksum'] ?? true;
         $restoreDb      = $options['restore_db']      ?? true;
         $restoreStorage = $options['restore_storage'] ?? false; // opt-in: dangerous
+        $wipeStorage    = $options['wipe_storage']    ?? false; // opt-in: replace instead of merge
         $destination    = $options['source']          ?? null; // 'local' | 'remote' | 'ftp', null to auto-detect
 
         if ($record->isFailed() || $record->isRunning()) {
@@ -69,15 +72,15 @@ class RestoreService
             $components = $this->store->unBundle($bundlePath);
 
             if ($record->type === 'landlord') {
-                return $this->restoreLandlord($record, $components, $restoreDb, $restoreStorage);
+                return $this->restoreLandlord($record, $components, $restoreDb, $restoreStorage, $wipeStorage);
             }
 
             if ($record->type === 'tenant') {
-                return $this->restoreTenant($record, $components, $restoreDb, $restoreStorage);
+                return $this->restoreTenant($record, $components, $restoreDb, $restoreStorage, $wipeStorage);
             }
 
             if ($record->type === 'filesystem') {
-                return $this->restoreFilesystem($components);
+                return $this->restoreFilesystem($components, $wipeStorage);
             }
 
             throw new RuntimeException("Unknown backup type: [{$record->type}]");
@@ -147,9 +150,10 @@ class RestoreService
      * @param  array         $components  Extracted component paths keyed by 'database' and 'storage'
      * @param  bool          $db          Whether to restore the database
      * @param  bool          $fs          Whether to restore the filesystem
+     * @param  bool          $wipe        Whether to erase the backed-up paths before extracting
      * @return bool
      */
-    protected function restoreLandlord(BackupRecord $record, array $components, bool $db, bool $fs): bool
+    protected function restoreLandlord(BackupRecord $record, array $components, bool $db, bool $fs, bool $wipe = false): bool
     {
         if ($db && isset($components['database'])) {
             $driver = config('database.default');
@@ -159,11 +163,7 @@ class RestoreService
         }
 
         if ($fs && isset($components['storage'])) {
-            $this->storage->extract(
-                source: $components['storage'],
-                destination: storage_path(),
-                wipe: false,
-            );
+            $this->extractStorage($components['storage'], $wipe);
             Log::info('[Vanguard] Landlord filesystem restored', ['record_id' => $record->id]);
         }
 
@@ -181,9 +181,10 @@ class RestoreService
      * @param  array         $components  Extracted component paths keyed by 'database' and 'storage'
      * @param  bool          $db          Whether to restore the database
      * @param  bool          $fs          Whether to restore the filesystem
+     * @param  bool          $wipe        Whether to erase the backed-up paths before extracting
      * @return bool
      */
-    protected function restoreTenant(BackupRecord $record, array $components, bool $db, bool $fs): bool
+    protected function restoreTenant(BackupRecord $record, array $components, bool $db, bool $fs, bool $wipe = false): bool
     {
         $tenantModel = config('vanguard.tenancy.tenant_model', \App\Models\Tenant::class);
         $tenant      = $tenantModel::findOrFail($record->tenant_id);
@@ -199,11 +200,7 @@ class RestoreService
             }
 
             if ($fs && isset($components['storage'])) {
-                $this->storage->extract(
-                    source: $components['storage'],
-                    destination: storage_path(),
-                    wipe: false,
-                );
+                $this->extractStorage($components['storage'], $wipe);
                 Log::info('[Vanguard] Tenant filesystem restored', ['tenant' => $record->tenant_id]);
             }
         } finally {
@@ -216,21 +213,109 @@ class RestoreService
     /**
      * Restore a filesystem-only backup.
      *
-     * Extracts the storage component into storage_path() without wiping
-     * existing files (wipe is opt-in to avoid accidental data loss).
+     * Extracts the storage component into storage_path(). Existing files are
+     * merged unless the caller explicitly asked for the backed-up paths to be
+     * erased first (wipe is opt-in to avoid accidental data loss).
      *
      * @param  array  $components  Extracted component paths keyed by 'storage'
+     * @param  bool   $wipe        Whether to erase the backed-up paths before extracting
      * @return bool
      */
-    protected function restoreFilesystem(array $components): bool
+    protected function restoreFilesystem(array $components, bool $wipe = false): bool
     {
         if (isset($components['storage'])) {
-            $this->storage->extract(
-                source: $components['storage'],
-                destination: storage_path(),
-                wipe: false,
-            );
+            $this->extractStorage($components['storage'], $wipe);
         }
         return true;
+    }
+
+    /**
+     * Extract a storage component into storage_path().
+     *
+     * When $wipe is true the backed-up directories are emptied first, so the
+     * result is the point-in-time state of the backup instead of a merge.
+     * The extraction itself never wipes: StorageDriver::extract() would delete
+     * the whole destination, and the destination here is storage_path().
+     *
+     * @param  string  $source  Absolute path to the storage archive
+     * @param  bool    $wipe    Whether to erase the backed-up paths first
+     */
+    protected function extractStorage(string $source, bool $wipe): void
+    {
+        if ($wipe) {
+            $this->wipeBackedUpPaths();
+        }
+
+        $this->storage->extract(
+            source: $source,
+            destination: storage_path(),
+            wipe: false,
+        );
+    }
+
+    /**
+     * Empty every directory that the filesystem backup covers.
+     *
+     * Deliberately scoped to vanguard.sources.filesystem_paths: only what the
+     * backup can put back may be erased. Logs, framework caches, sessions and
+     * anything else living in storage_path() outside that list must survive a
+     * restore, so storage_path() itself is never wiped.
+     *
+     * Each directory node is kept and only its content removed, so permissions
+     * — and any symlink pointing at it — stay intact.
+     */
+    protected function wipeBackedUpPaths(): void
+    {
+        foreach ($this->backedUpPaths() as $path) {
+            if (! is_dir($path)) {
+                continue;
+            }
+
+            foreach (array_diff(scandir($path) ?: [], ['.', '..']) as $entry) {
+                exec(sprintf('rm -rf %s', escapeshellarg($path.DIRECTORY_SEPARATOR.$entry)));
+            }
+
+            Log::info('[Vanguard] Storage path wiped before restore', ['path' => $path]);
+        }
+    }
+
+    /**
+     * The absolute directories a filesystem restore is allowed to erase.
+     *
+     * Resolved from vanguard.sources.filesystem_paths relative to storage_path(),
+     * exactly the way StorageDriver resolves them when creating the backup.
+     * Entries that do not sit strictly below storage_path() are dropped: a stray
+     * '', '.' or '../..' must never turn a restore into a full storage wipe.
+     *
+     * @return array<string>
+     */
+    public function backedUpPaths(): array
+    {
+        $root = realpath(storage_path()) ?: rtrim(storage_path(), DIRECTORY_SEPARATOR);
+
+        $safe = [];
+
+        foreach ((array) config('vanguard.sources.filesystem_paths', ['app']) as $relative) {
+            $path     = rtrim(storage_path($relative), DIRECTORY_SEPARATOR);
+            $resolved = realpath($path);
+
+            // A path that does not exist yet is kept as configured: nothing to
+            // erase, but callers still want to name it when asking to confirm.
+            if ($resolved !== false) {
+                $path = rtrim($resolved, DIRECTORY_SEPARATOR);
+            }
+
+            if (! str_starts_with($path.DIRECTORY_SEPARATOR, $root.DIRECTORY_SEPARATOR) || $path === $root) {
+                Log::warning('[Vanguard] Refusing to wipe a path outside storage_path()', [
+                    'configured' => $relative,
+                    'resolved'   => $path,
+                ]);
+                continue;
+            }
+
+            $safe[] = $path;
+        }
+
+        return $safe;
     }
 }

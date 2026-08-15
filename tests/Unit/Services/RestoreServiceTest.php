@@ -4,6 +4,7 @@ namespace SoftArtisan\Vanguard\Tests\Unit\Services;
 
 use Mockery;
 use Mockery\MockInterface;
+use PHPUnit\Framework\Attributes\Test;
 use RuntimeException;
 use SoftArtisan\Vanguard\Models\BackupRecord;
 use SoftArtisan\Vanguard\Services\BackupStorageManager;
@@ -46,7 +47,7 @@ class RestoreServiceTest extends TestCase
     // Guard clauses
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function it_throws_when_restoring_a_failed_backup(): void
     {
         $record = $this->makeRecord(['status' => 'failed']);
@@ -57,7 +58,7 @@ class RestoreServiceTest extends TestCase
         $this->restoreService->restore($record);
     }
 
-    /** @test */
+    #[Test]
     public function it_throws_when_restoring_a_running_backup(): void
     {
         $record = $this->makeRecord(['status' => 'running']);
@@ -68,7 +69,7 @@ class RestoreServiceTest extends TestCase
         $this->restoreService->restore($record);
     }
 
-    /** @test */
+    #[Test]
     public function it_throws_when_the_backup_reached_no_destination_at_all(): void
     {
         $record = $this->makeRecord([
@@ -87,7 +88,7 @@ class RestoreServiceTest extends TestCase
     // Checksum verification
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function it_throws_when_checksum_fails_verification(): void
     {
         $record = $this->makeRecord([
@@ -105,7 +106,7 @@ class RestoreServiceTest extends TestCase
         $this->restoreService->restore($record, ['verify_checksum' => true]);
     }
 
-    /** @test */
+    #[Test]
     public function it_skips_checksum_verification_when_option_is_false(): void
     {
         $record = $this->makeRecord([
@@ -127,7 +128,7 @@ class RestoreServiceTest extends TestCase
     // Landlord restore
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function it_restores_landlord_database_from_backup(): void
     {
         config(['database.default' => 'sqlite']);
@@ -153,7 +154,7 @@ class RestoreServiceTest extends TestCase
         $this->assertTrue($result);
     }
 
-    /** @test */
+    #[Test]
     public function it_skips_db_restore_when_option_is_false(): void
     {
         $record = $this->makeRecord([
@@ -175,7 +176,7 @@ class RestoreServiceTest extends TestCase
         $this->assertTrue($result);
     }
 
-    /** @test */
+    #[Test]
     public function it_restores_filesystem_when_restore_storage_is_true(): void
     {
         $record = $this->makeRecord([
@@ -202,7 +203,7 @@ class RestoreServiceTest extends TestCase
         $this->assertTrue($result);
     }
 
-    /** @test */
+    #[Test]
     public function it_skips_filesystem_restore_when_restore_storage_is_false(): void
     {
         $record = $this->makeRecord([
@@ -229,7 +230,7 @@ class RestoreServiceTest extends TestCase
     // Filesystem-only restore
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function it_restores_filesystem_type_backup(): void
     {
         $record = $this->makeRecord([
@@ -252,7 +253,7 @@ class RestoreServiceTest extends TestCase
     // Unknown type
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function it_throws_for_unknown_backup_type(): void
     {
         $record = $this->makeRecord([
@@ -274,7 +275,7 @@ class RestoreServiceTest extends TestCase
     // source option — local / remote / ftp path selection
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function it_uses_local_path_by_default(): void
     {
         $record = $this->makeRecord([
@@ -300,7 +301,7 @@ class RestoreServiceTest extends TestCase
         $this->assertTrue($result);
     }
 
-    /** @test */
+    #[Test]
     public function it_uses_remote_path_when_source_is_remote(): void
     {
         $record = $this->makeRecord([
@@ -326,7 +327,7 @@ class RestoreServiceTest extends TestCase
         $this->assertTrue($result);
     }
 
-    /** @test */
+    #[Test]
     public function it_uses_ftp_path_when_source_is_ftp(): void
     {
         $record = $this->makeRecord([
@@ -352,7 +353,7 @@ class RestoreServiceTest extends TestCase
         $this->assertTrue($result);
     }
 
-    /** @test */
+    #[Test]
     public function it_throws_when_ftp_path_is_null_but_source_is_ftp(): void
     {
         $record = $this->makeRecord([
@@ -371,7 +372,7 @@ class RestoreServiceTest extends TestCase
         ]);
     }
 
-    /** @test */
+    #[Test]
     public function it_falls_back_to_the_remote_copy_when_no_local_one_exists(): void
     {
         // The recommended production setup: local disabled, remote only.
@@ -397,7 +398,7 @@ class RestoreServiceTest extends TestCase
         $this->assertTrue($result);
     }
 
-    /** @test */
+    #[Test]
     public function it_falls_back_to_the_ftp_copy_when_it_is_the_only_one(): void
     {
         $record = $this->makeRecord([
@@ -423,7 +424,7 @@ class RestoreServiceTest extends TestCase
         $this->assertTrue($result);
     }
 
-    /** @test */
+    #[Test]
     public function it_lists_the_available_destinations_when_the_requested_one_is_empty(): void
     {
         $record = $this->makeRecord([
@@ -440,7 +441,7 @@ class RestoreServiceTest extends TestCase
         ]);
     }
 
-    /** @test */
+    #[Test]
     public function it_always_cleans_tmp_even_when_restore_throws(): void
     {
         $record = $this->makeRecord([
