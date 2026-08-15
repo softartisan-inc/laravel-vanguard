@@ -2,6 +2,7 @@
 
 namespace SoftArtisan\Vanguard\Tests\Unit\Services;
 
+use PHPUnit\Framework\Attributes\Test;
 use RuntimeException;
 use SoftArtisan\Vanguard\Services\Drivers\DatabaseDriver;
 use SoftArtisan\Vanguard\Tests\TestCase;
@@ -30,7 +31,7 @@ class DatabaseDriverTest extends TestCase
     // Unsupported driver
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function it_throws_for_unsupported_driver_on_dump(): void
     {
         $this->expectException(RuntimeException::class);
@@ -39,7 +40,7 @@ class DatabaseDriverTest extends TestCase
         $this->driver->dump('oracle', [], $this->tmpDir.'/out.sql.gz');
     }
 
-    /** @test */
+    #[Test]
     public function it_throws_for_unsupported_driver_on_restore(): void
     {
         $this->expectException(RuntimeException::class);
@@ -52,7 +53,7 @@ class DatabaseDriverTest extends TestCase
     // Restore: missing file
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function it_throws_when_restore_source_file_does_not_exist(): void
     {
         $this->expectException(RuntimeException::class);
@@ -65,7 +66,7 @@ class DatabaseDriverTest extends TestCase
     // SQLite: dump and restore cycle
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function it_can_dump_and_restore_a_sqlite_database(): void
     {
         // Create a real SQLite file with a table
@@ -96,7 +97,7 @@ class DatabaseDriverTest extends TestCase
         $this->assertSame('Alice', $row['name']);
     }
 
-    /** @test */
+    #[Test]
     public function it_throws_when_sqlite_source_file_does_not_exist(): void
     {
         $this->expectException(RuntimeException::class);
@@ -109,7 +110,7 @@ class DatabaseDriverTest extends TestCase
     // Destination extension normalization
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function it_normalizes_destination_extension_when_sql_is_given(): void
     {
         // Create real SQLite to avoid "file not found"
@@ -126,7 +127,7 @@ class DatabaseDriverTest extends TestCase
         $this->assertFileExists($result);
     }
 
-    /** @test */
+    #[Test]
     public function it_normalizes_destination_extension_when_no_extension_given(): void
     {
         $sqliteFile = $this->tmpDir.'/ext_test2.sqlite';
@@ -145,7 +146,7 @@ class DatabaseDriverTest extends TestCase
     // MySQL args (via reflection — no actual MySQL server needed)
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function mysql_connection_args_include_host_port_and_user(): void
     {
         $reflection = new \ReflectionMethod(DatabaseDriver::class, 'mysqlConnectionArgs');
@@ -164,7 +165,7 @@ class DatabaseDriverTest extends TestCase
         $this->assertStringContainsString('--single-transaction', $args);
     }
 
-    /** @test */
+    #[Test]
     public function mysql_connection_args_include_socket_when_configured(): void
     {
         $reflection = new \ReflectionMethod(DatabaseDriver::class, 'mysqlConnectionArgs');
@@ -181,7 +182,7 @@ class DatabaseDriverTest extends TestCase
         $this->assertStringContainsString('mysql.sock', $args);
     }
 
-    /** @test */
+    #[Test]
     public function pg_env_returns_empty_string_when_no_password(): void
     {
         $reflection = new \ReflectionMethod(DatabaseDriver::class, 'pgPasswordEnv');
@@ -192,7 +193,7 @@ class DatabaseDriverTest extends TestCase
         $this->assertSame('', $env);
     }
 
-    /** @test */
+    #[Test]
     public function pg_env_returns_pgpassword_when_password_set(): void
     {
         $reflection = new \ReflectionMethod(DatabaseDriver::class, 'pgPasswordEnv');

@@ -2,6 +2,7 @@
 
 namespace SoftArtisan\Vanguard\Tests\Unit\Services;
 
+use PHPUnit\Framework\Attributes\Test;
 use SoftArtisan\Vanguard\Services\TenancyResolver;
 use SoftArtisan\Vanguard\Tests\TestCase;
 
@@ -11,7 +12,7 @@ class TenancyResolverTest extends TestCase
     // isEnabled
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function is_enabled_returns_false_when_config_disabled(): void
     {
         config(['vanguard.tenancy.enabled' => false]);
@@ -21,7 +22,7 @@ class TenancyResolverTest extends TestCase
         $this->assertFalse($resolver->isEnabled());
     }
 
-    /** @test */
+    #[Test]
     public function is_enabled_returns_false_when_tenancy_package_not_installed(): void
     {
         config(['vanguard.tenancy.enabled' => true]);
@@ -37,7 +38,7 @@ class TenancyResolverTest extends TestCase
     // allTenants
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function all_tenants_returns_empty_collection_when_disabled(): void
     {
         config(['vanguard.tenancy.enabled' => false]);
@@ -51,7 +52,7 @@ class TenancyResolverTest extends TestCase
     // landlordDbConfig
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function landlord_db_config_returns_default_connection_config(): void
     {
         config(['database.default' => 'sqlite']);
@@ -67,7 +68,7 @@ class TenancyResolverTest extends TestCase
         $this->assertSame('sqlite', $config['driver']);
     }
 
-    /** @test */
+    #[Test]
     public function landlord_db_config_prefers_central_connection_from_tenancy_config(): void
     {
         config(['tenancy.database.central_connection' => 'sqlite']);
@@ -86,7 +87,7 @@ class TenancyResolverTest extends TestCase
     // tenantSchedule
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function tenant_schedule_returns_null_when_attribute_not_set(): void
     {
         $tenant = new class {
@@ -98,7 +99,7 @@ class TenancyResolverTest extends TestCase
         $this->assertNull($resolver->tenantSchedule($tenant));
     }
 
-    /** @test */
+    #[Test]
     public function tenant_schedule_returns_cron_when_attribute_is_set(): void
     {
         $tenant = new class {
@@ -110,7 +111,7 @@ class TenancyResolverTest extends TestCase
         $this->assertSame('0 4 * * 0', $resolver->tenantSchedule($tenant));
     }
 
-    /** @test */
+    #[Test]
     public function tenant_schedule_returns_null_when_attribute_is_null(): void
     {
         $tenant = new class {

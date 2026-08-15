@@ -3,6 +3,7 @@
 namespace SoftArtisan\Vanguard\Tests\Unit\Models;
 
 use Carbon\Carbon;
+use PHPUnit\Framework\Attributes\Test;
 use SoftArtisan\Vanguard\Models\BackupRecord;
 use SoftArtisan\Vanguard\Tests\TestCase;
 
@@ -12,7 +13,7 @@ class BackupRecordTest extends TestCase
     // Status helpers
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function it_correctly_identifies_completed_status(): void
     {
         $record = $this->makeRecord(['status' => 'completed']);
@@ -23,7 +24,7 @@ class BackupRecordTest extends TestCase
         $this->assertFalse($record->isPending());
     }
 
-    /** @test */
+    #[Test]
     public function it_correctly_identifies_running_status(): void
     {
         $record = $this->makeRecord(['status' => 'running']);
@@ -33,7 +34,7 @@ class BackupRecordTest extends TestCase
         $this->assertFalse($record->isFailed());
     }
 
-    /** @test */
+    #[Test]
     public function it_correctly_identifies_failed_status(): void
     {
         $record = $this->makeRecord(['status' => 'failed']);
@@ -43,7 +44,7 @@ class BackupRecordTest extends TestCase
         $this->assertFalse($record->isRunning());
     }
 
-    /** @test */
+    #[Test]
     public function it_correctly_identifies_pending_status(): void
     {
         $record = $this->makeRecord(['status' => 'pending']);
@@ -56,35 +57,35 @@ class BackupRecordTest extends TestCase
     // file_size_human accessor
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function it_formats_file_size_in_bytes(): void
     {
         $record = $this->makeRecord(['file_size' => 512]);
         $this->assertSame('512 B', $record->file_size_human);
     }
 
-    /** @test */
+    #[Test]
     public function it_formats_file_size_in_kilobytes(): void
     {
         $record = $this->makeRecord(['file_size' => 2048]);
         $this->assertSame('2 KB', $record->file_size_human);
     }
 
-    /** @test */
+    #[Test]
     public function it_formats_file_size_in_megabytes(): void
     {
         $record = $this->makeRecord(['file_size' => 1024 * 1024 * 5]);
         $this->assertSame('5 MB', $record->file_size_human);
     }
 
-    /** @test */
+    #[Test]
     public function it_formats_file_size_in_gigabytes(): void
     {
         $record = $this->makeRecord(['file_size' => 1024 * 1024 * 1024 * 2]);
         $this->assertSame('2 GB', $record->file_size_human);
     }
 
-    /** @test */
+    #[Test]
     public function it_returns_dash_when_file_size_is_null(): void
     {
         $record = $this->makeRecord(['file_size' => null]);
@@ -95,7 +96,7 @@ class BackupRecordTest extends TestCase
     // duration accessor
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function it_returns_duration_in_seconds_when_under_one_minute(): void
     {
         $record = $this->makeRecord([
@@ -106,7 +107,7 @@ class BackupRecordTest extends TestCase
         $this->assertSame('45s', $record->duration);
     }
 
-    /** @test */
+    #[Test]
     public function it_returns_duration_in_minutes_and_seconds(): void
     {
         $record = $this->makeRecord([
@@ -117,7 +118,7 @@ class BackupRecordTest extends TestCase
         $this->assertSame('2m 5s', $record->duration);
     }
 
-    /** @test */
+    #[Test]
     public function it_returns_null_duration_when_dates_are_missing(): void
     {
         $record = $this->makeRecord([
@@ -132,7 +133,7 @@ class BackupRecordTest extends TestCase
     // Scopes
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function scope_completed_filters_correctly(): void
     {
         $this->makeRecord(['status' => 'completed']);
@@ -143,7 +144,7 @@ class BackupRecordTest extends TestCase
         $this->assertCount(2, BackupRecord::completed()->get());
     }
 
-    /** @test */
+    #[Test]
     public function scope_running_filters_correctly(): void
     {
         $this->makeRecord(['status' => 'running']);
@@ -152,7 +153,7 @@ class BackupRecordTest extends TestCase
         $this->assertCount(1, BackupRecord::running()->get());
     }
 
-    /** @test */
+    #[Test]
     public function scope_failed_filters_correctly(): void
     {
         $this->makeRecord(['status' => 'failed']);
@@ -162,7 +163,7 @@ class BackupRecordTest extends TestCase
         $this->assertCount(2, BackupRecord::failed()->get());
     }
 
-    /** @test */
+    #[Test]
     public function scope_landlord_filters_correctly(): void
     {
         $this->makeRecord(['tenant_id' => null]);
@@ -172,7 +173,7 @@ class BackupRecordTest extends TestCase
         $this->assertCount(2, BackupRecord::landlord()->get());
     }
 
-    /** @test */
+    #[Test]
     public function scope_for_tenant_filters_by_tenant_id(): void
     {
         $this->makeRecord(['tenant_id' => 'acme']);
@@ -188,7 +189,7 @@ class BackupRecordTest extends TestCase
     // JSON casts
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function it_casts_sources_and_destinations_as_arrays(): void
     {
         $record = $this->makeRecord([
@@ -204,7 +205,7 @@ class BackupRecordTest extends TestCase
         $this->assertContains('remote', $fresh->destinations);
     }
 
-    /** @test */
+    #[Test]
     public function it_casts_meta_as_array(): void
     {
         $record = $this->makeRecord(['meta' => ['include_filesystem' => true, 'tag' => 'nightly']]);
@@ -220,7 +221,7 @@ class BackupRecordTest extends TestCase
     // Prunable
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function prunable_only_includes_completed_records_beyond_retention(): void
     {
         config(['vanguard.retention.days' => 7]);

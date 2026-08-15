@@ -3,6 +3,7 @@
 namespace SoftArtisan\Vanguard\Tests\Unit\Services;
 
 use Illuminate\Support\Facades\Storage;
+use PHPUnit\Framework\Attributes\Test;
 use RuntimeException;
 use SoftArtisan\Vanguard\Models\BackupRecord;
 use SoftArtisan\Vanguard\Services\BackupStorageManager;
@@ -34,7 +35,7 @@ class BackupStorageManagerTest extends TestCase
     // tmpPath
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function tmp_path_returns_path_inside_session_directory(): void
     {
         $path = $this->manager->tmpPath('test_file.sql.gz');
@@ -43,7 +44,7 @@ class BackupStorageManagerTest extends TestCase
         $this->assertStringEndsWith('test_file.sql.gz', $path);
     }
 
-    /** @test */
+    #[Test]
     public function tmp_path_directory_is_created_on_instantiation(): void
     {
         $path = $this->manager->tmpPath('some_file.txt');
@@ -52,7 +53,7 @@ class BackupStorageManagerTest extends TestCase
         $this->assertDirectoryExists($dir);
     }
 
-    /** @test */
+    #[Test]
     public function clean_tmp_removes_session_directory(): void
     {
         $path = $this->manager->tmpPath('file.txt');
@@ -70,7 +71,7 @@ class BackupStorageManagerTest extends TestCase
     // bundle
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function bundle_creates_tar_archive_and_stores_to_local_disk(): void
     {
         config(['vanguard.destinations.local.enabled' => true]);
@@ -92,7 +93,7 @@ class BackupStorageManagerTest extends TestCase
         Storage::disk('local')->assertExists($result['local_path']);
     }
 
-    /** @test */
+    #[Test]
     public function bundle_stores_to_both_local_and_remote_when_both_enabled(): void
     {
         Storage::fake('s3');
@@ -114,7 +115,7 @@ class BackupStorageManagerTest extends TestCase
         Storage::disk('s3')->assertExists($result['remote_path']);
     }
 
-    /** @test */
+    #[Test]
     public function bundle_throws_when_component_file_does_not_exist(): void
     {
         $this->expectException(RuntimeException::class);
@@ -122,7 +123,7 @@ class BackupStorageManagerTest extends TestCase
         $this->manager->bundle(['database' => '/nonexistent/file.sql.gz'], 'bad_backup');
     }
 
-    /** @test */
+    #[Test]
     public function bundle_stores_to_ftp_disk_when_ftp_enabled(): void
     {
         Storage::fake('ftp');
@@ -145,7 +146,7 @@ class BackupStorageManagerTest extends TestCase
         Storage::disk('ftp')->assertExists($result['ftp_path']);
     }
 
-    /** @test */
+    #[Test]
     public function bundle_stores_to_all_three_destinations_when_all_enabled(): void
     {
         Storage::fake('s3');
@@ -173,7 +174,7 @@ class BackupStorageManagerTest extends TestCase
         Storage::disk('ftp')->assertExists($result['ftp_path']);
     }
 
-    /** @test */
+    #[Test]
     public function bundle_ftp_path_is_null_when_ftp_disabled(): void
     {
         config(['vanguard.destinations.local.enabled'  => true]);
@@ -193,7 +194,7 @@ class BackupStorageManagerTest extends TestCase
     // download
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function download_copies_file_from_local_disk_to_tmp(): void
     {
         config(['vanguard.destinations.local.disk' => 'local']);
@@ -206,7 +207,7 @@ class BackupStorageManagerTest extends TestCase
         $this->assertSame('fake-tar-content', file_get_contents($tmpFile));
     }
 
-    /** @test */
+    #[Test]
     public function download_defaults_to_local_disk_when_no_destination_given(): void
     {
         config(['vanguard.destinations.local.disk' => 'local']);
@@ -219,7 +220,7 @@ class BackupStorageManagerTest extends TestCase
         $this->assertSame('default-content', file_get_contents($tmpFile));
     }
 
-    /** @test */
+    #[Test]
     public function download_copies_file_from_remote_disk_when_destination_is_remote(): void
     {
         Storage::fake('s3');
@@ -233,7 +234,7 @@ class BackupStorageManagerTest extends TestCase
         $this->assertSame('s3-content', file_get_contents($tmpFile));
     }
 
-    /** @test */
+    #[Test]
     public function download_copies_file_from_ftp_disk_when_destination_is_ftp(): void
     {
         Storage::fake('ftp');
@@ -247,7 +248,7 @@ class BackupStorageManagerTest extends TestCase
         $this->assertSame('ftp-content', file_get_contents($tmpFile));
     }
 
-    /** @test */
+    #[Test]
     public function download_throws_when_file_not_found_on_disk(): void
     {
         $this->expectException(RuntimeException::class);
@@ -256,7 +257,7 @@ class BackupStorageManagerTest extends TestCase
         $this->manager->download('vanguard-backups/nonexistent.tar', 'local');
     }
 
-    /** @test */
+    #[Test]
     public function download_throws_when_file_not_found_on_ftp_disk(): void
     {
         Storage::fake('ftp');
@@ -272,7 +273,7 @@ class BackupStorageManagerTest extends TestCase
     // verifyChecksum
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function verify_checksum_returns_true_for_valid_file(): void
     {
         $file = $this->manager->tmpPath('check.txt');
@@ -283,7 +284,7 @@ class BackupStorageManagerTest extends TestCase
         $this->assertTrue($this->manager->verifyChecksum($file, $expected));
     }
 
-    /** @test */
+    #[Test]
     public function verify_checksum_returns_false_for_corrupted_file(): void
     {
         $file = $this->manager->tmpPath('corrupted.txt');
@@ -296,7 +297,7 @@ class BackupStorageManagerTest extends TestCase
         $this->assertFalse($this->manager->verifyChecksum($file, $expected));
     }
 
-    /** @test */
+    #[Test]
     public function verify_checksum_returns_false_for_wrong_hash(): void
     {
         $file = $this->manager->tmpPath('hash_test.txt');
@@ -309,7 +310,7 @@ class BackupStorageManagerTest extends TestCase
     // pruneOldBackups
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function prune_deletes_completed_records_beyond_retention(): void
     {
         config(['vanguard.retention.days' => 7]);
@@ -335,7 +336,7 @@ class BackupStorageManagerTest extends TestCase
         Storage::disk('local')->assertMissing($storedPath);
     }
 
-    /** @test */
+    #[Test]
     public function prune_does_not_delete_failed_records(): void
     {
         config(['vanguard.retention.days' => 1]);
@@ -350,7 +351,7 @@ class BackupStorageManagerTest extends TestCase
         $this->assertSame(0, $deleted);
     }
 
-    /** @test */
+    #[Test]
     public function prune_deletes_ftp_file_when_ftp_path_is_set(): void
     {
         Storage::fake('ftp');
@@ -376,7 +377,7 @@ class BackupStorageManagerTest extends TestCase
         Storage::disk('ftp')->assertMissing($ftpPath);
     }
 
-    /** @test */
+    #[Test]
     public function prune_can_filter_by_tenant_id(): void
     {
         config(['vanguard.retention.days' => 1]);
@@ -399,7 +400,7 @@ class BackupStorageManagerTest extends TestCase
     // unBundle
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function unbundle_correctly_maps_database_and_storage_components(): void
     {
         // Create fake component files

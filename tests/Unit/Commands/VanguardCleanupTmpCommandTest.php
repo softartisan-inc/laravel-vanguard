@@ -2,6 +2,7 @@
 
 namespace SoftArtisan\Vanguard\Tests\Unit\Commands;
 
+use PHPUnit\Framework\Attributes\Test;
 use SoftArtisan\Vanguard\Tests\TestCase;
 
 class VanguardCleanupTmpCommandTest extends TestCase
@@ -27,7 +28,7 @@ class VanguardCleanupTmpCommandTest extends TestCase
     // No-op cases
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function cleanup_tmp_succeeds_when_no_tmp_directory_exists(): void
     {
         config(['vanguard.tmp_path' => '/nonexistent/path/'.uniqid()]);
@@ -37,7 +38,7 @@ class VanguardCleanupTmpCommandTest extends TestCase
             ->expectsOutputToContain('nothing to clean');
     }
 
-    /** @test */
+    #[Test]
     public function cleanup_tmp_does_not_remove_recent_directories(): void
     {
         $recentDir = $this->tmpBase.'/vanguard_recent_'.uniqid();
@@ -51,7 +52,7 @@ class VanguardCleanupTmpCommandTest extends TestCase
         $this->assertDirectoryExists($recentDir);
     }
 
-    /** @test */
+    #[Test]
     public function cleanup_tmp_does_not_touch_non_vanguard_directories(): void
     {
         $foreignDir = $this->tmpBase.'/some_other_app_tmp';
@@ -69,7 +70,7 @@ class VanguardCleanupTmpCommandTest extends TestCase
     // Removal
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function cleanup_tmp_removes_stale_vanguard_directories(): void
     {
         $staleDir = $this->tmpBase.'/vanguard_stale_'.uniqid();
@@ -83,7 +84,7 @@ class VanguardCleanupTmpCommandTest extends TestCase
         $this->assertDirectoryDoesNotExist($staleDir);
     }
 
-    /** @test */
+    #[Test]
     public function cleanup_tmp_removes_only_directories_older_than_hours_threshold(): void
     {
         $staleDir  = $this->tmpBase.'/vanguard_stale_'.uniqid();
@@ -103,7 +104,7 @@ class VanguardCleanupTmpCommandTest extends TestCase
         $this->assertDirectoryExists($freshDir);
     }
 
-    /** @test */
+    #[Test]
     public function cleanup_tmp_removes_multiple_stale_directories(): void
     {
         for ($i = 0; $i < 3; $i++) {
@@ -117,7 +118,7 @@ class VanguardCleanupTmpCommandTest extends TestCase
             ->expectsOutputToContain('3');
     }
 
-    /** @test */
+    #[Test]
     public function cleanup_tmp_ignores_regular_files_in_base_directory(): void
     {
         $file = $this->tmpBase.'/vanguard_somefile.txt';
@@ -131,7 +132,7 @@ class VanguardCleanupTmpCommandTest extends TestCase
         $this->assertFileExists($file);
     }
 
-    /** @test */
+    #[Test]
     public function cleanup_tmp_hours_option_defaults_to_6(): void
     {
         // A directory 5 hours old should survive with default --hours=6

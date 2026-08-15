@@ -2,6 +2,7 @@
 
 namespace SoftArtisan\Vanguard\Tests\Unit\Services;
 
+use PHPUnit\Framework\Attributes\Test;
 use RuntimeException;
 use SoftArtisan\Vanguard\Services\Drivers\StorageDriver;
 use SoftArtisan\Vanguard\Tests\TestCase;
@@ -30,7 +31,7 @@ class StorageDriverTest extends TestCase
     // Archive
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function it_creates_a_tar_gz_archive_from_paths(): void
     {
         $src = $this->tmpDir.'/source';
@@ -47,7 +48,7 @@ class StorageDriverTest extends TestCase
         $this->assertSame($destination, $result);
     }
 
-    /** @test */
+    #[Test]
     public function it_creates_an_empty_archive_when_no_paths_given(): void
     {
         $destination = $this->tmpDir.'/empty.tar.gz';
@@ -58,7 +59,7 @@ class StorageDriverTest extends TestCase
         $this->assertSame($destination, $result);
     }
 
-    /** @test */
+    #[Test]
     public function it_creates_an_empty_archive_when_paths_do_not_exist(): void
     {
         $destination = $this->tmpDir.'/empty.tar.gz';
@@ -68,7 +69,7 @@ class StorageDriverTest extends TestCase
         $this->assertFileExists($result);
     }
 
-    /** @test */
+    #[Test]
     public function it_throws_when_archive_destination_parent_does_not_exist(): void
     {
         $destination = $this->tmpDir.'/missing_parent/archive.tar.gz';
@@ -86,7 +87,7 @@ class StorageDriverTest extends TestCase
     // Extract
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function it_extracts_a_tar_gz_archive_to_destination(): void
     {
         // Create source and archive
@@ -118,7 +119,7 @@ class StorageDriverTest extends TestCase
         $this->assertNotEmpty($txtFiles, 'Expected at least one .txt file to be extracted');
     }
 
-    /** @test */
+    #[Test]
     public function it_throws_when_extract_source_does_not_exist(): void
     {
         $this->expectException(RuntimeException::class);
@@ -127,7 +128,7 @@ class StorageDriverTest extends TestCase
         $this->driver->extract('/nonexistent.tar.gz', $this->tmpDir.'/dest');
     }
 
-    /** @test */
+    #[Test]
     public function it_wipes_destination_before_extract_when_wipe_is_true(): void
     {
         // Create a pre-existing file
@@ -152,7 +153,7 @@ class StorageDriverTest extends TestCase
     // Resolve paths from config
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function it_resolves_backup_paths_from_config(): void
     {
         // storage_path('app') typically resolves to an existing directory
@@ -167,7 +168,7 @@ class StorageDriverTest extends TestCase
         }
     }
 
-    /** @test */
+    #[Test]
     public function it_resolves_exclude_paths_from_config(): void
     {
         config(['vanguard.sources.filesystem_exclude' => ['app/public/tmp', 'logs']]);
@@ -183,7 +184,7 @@ class StorageDriverTest extends TestCase
     // Archive with exclude
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function it_excludes_specified_paths_from_archive(): void
     {
         $src = $this->tmpDir.'/source_with_excludes';

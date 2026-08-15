@@ -22,6 +22,8 @@ jobs:
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
+          # Same version as the CI lint job: the lowest PHP the package supports
+          # (composer.json: php ^8.3).
           php-version: "8.3"
           extensions: pdo, pdo_sqlite, sqlite3, zip
           coverage: none
@@ -37,7 +39,10 @@ jobs:
           version: 9
 
       - name: Install PHP dependencies
-        run: composer install --prefer-dist --no-interaction --no-progress
+        # `composer update`, not `install`: composer.lock is gitignored, so a
+        # fresh checkout has no lock to install from and `install` would resolve
+        # nothing. Same reason as in ci.yml.
+        run: composer update --prefer-dist --no-interaction --no-progress
 
       - name: Run tests
         run: composer test

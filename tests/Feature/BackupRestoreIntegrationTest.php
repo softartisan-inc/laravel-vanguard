@@ -5,6 +5,7 @@ namespace SoftArtisan\Vanguard\Tests\Feature;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Storage;
 use Mockery;
+use PHPUnit\Framework\Attributes\Test;
 use SoftArtisan\Vanguard\Events\BackupCompleted;
 use SoftArtisan\Vanguard\Events\BackupFailed;
 use SoftArtisan\Vanguard\Events\BackupStarted;
@@ -43,7 +44,7 @@ class BackupRestoreIntegrationTest extends TestCase
     // Full landlord backup → restore cycle
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function full_landlord_sqlite_backup_and_restore_cycle(): void
     {
         config([
@@ -98,7 +99,7 @@ class BackupRestoreIntegrationTest extends TestCase
     // Filesystem backup + restore cycle
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function filesystem_backup_and_restore_cycle(): void
     {
         // Create a test source directory
@@ -150,7 +151,7 @@ class BackupRestoreIntegrationTest extends TestCase
     // Checksum integrity
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function restore_rejects_tampered_backup_file(): void
     {
         config([
@@ -185,7 +186,7 @@ class BackupRestoreIntegrationTest extends TestCase
     // BackupRecord persistence
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function backup_record_is_persisted_with_all_fields(): void
     {
         config([
@@ -218,7 +219,7 @@ class BackupRestoreIntegrationTest extends TestCase
         $this->assertSame('nightly', $fresh->meta['tag']);
     }
 
-    /** @test */
+    #[Test]
     public function backup_failure_persists_error_message(): void
     {
         config([
@@ -256,7 +257,7 @@ class BackupRestoreIntegrationTest extends TestCase
     // Prune integration
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function prune_removes_old_backup_files_from_storage(): void
     {
         config(['vanguard.retention.days' => 3]);

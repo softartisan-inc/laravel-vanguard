@@ -5,6 +5,7 @@ namespace SoftArtisan\Vanguard\Tests\Unit\Services;
 use Illuminate\Support\Facades\Event;
 use Mockery;
 use Mockery\MockInterface;
+use PHPUnit\Framework\Attributes\Test;
 use RuntimeException;
 use SoftArtisan\Vanguard\Events\BackupCompleted;
 use SoftArtisan\Vanguard\Events\BackupFailed;
@@ -59,7 +60,7 @@ class BackupManagerTest extends TestCase
     // backupLandlord — happy path
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function backup_landlord_creates_completed_record_on_success(): void
     {
         config(['vanguard.sources.landlord_database' => true]);
@@ -88,7 +89,7 @@ class BackupManagerTest extends TestCase
         $this->assertNotNull($record->completed_at);
     }
 
-    /** @test */
+    #[Test]
     public function backup_landlord_fires_started_and_completed_events(): void
     {
         config(['vanguard.sources.landlord_database' => false]);
@@ -106,7 +107,7 @@ class BackupManagerTest extends TestCase
         Event::assertNotDispatched(BackupFailed::class);
     }
 
-    /** @test */
+    #[Test]
     public function backup_landlord_marks_record_failed_and_fires_event_on_exception(): void
     {
         config(['vanguard.sources.landlord_database' => true]);
@@ -135,7 +136,7 @@ class BackupManagerTest extends TestCase
         }
     }
 
-    /** @test */
+    #[Test]
     public function backup_landlord_always_cleans_tmp_even_on_failure(): void
     {
         config(['vanguard.sources.landlord_database' => true]);
@@ -153,7 +154,7 @@ class BackupManagerTest extends TestCase
     // backupLandlord — filesystem skipped when disabled
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function backup_landlord_skips_db_when_source_disabled(): void
     {
         config(['vanguard.sources.landlord_database' => false]);
@@ -171,7 +172,7 @@ class BackupManagerTest extends TestCase
         $this->assertSame('completed', $record->status);
     }
 
-    /** @test */
+    #[Test]
     public function backup_landlord_skips_filesystem_when_option_false(): void
     {
         config(['vanguard.sources.landlord_database' => false]);
@@ -192,7 +193,7 @@ class BackupManagerTest extends TestCase
     // backupTenant
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function backup_tenant_creates_completed_record_for_tenant(): void
     {
         config(['vanguard.sources.tenant_databases' => true]);
@@ -224,7 +225,7 @@ class BackupManagerTest extends TestCase
         $this->assertSame('acme', $record->tenant_id);
     }
 
-    /** @test */
+    #[Test]
     public function backup_tenant_marks_record_failed_when_db_driver_throws(): void
     {
         config(['vanguard.sources.tenant_databases' => true]);
@@ -260,7 +261,7 @@ class BackupManagerTest extends TestCase
     // backupFilesystem
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function backup_filesystem_creates_filesystem_type_record(): void
     {
         $this->storage->shouldReceive('resolveBackupPaths')->once()->andReturn(['/storage/app']);
@@ -283,7 +284,7 @@ class BackupManagerTest extends TestCase
     // backupAllTenants
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function backup_all_tenants_runs_synchronously_when_queue_disabled(): void
     {
         config(['vanguard.queue.enabled' => false]);
@@ -318,7 +319,7 @@ class BackupManagerTest extends TestCase
         $this->assertArrayHasKey('record', $results[1]);
     }
 
-    /** @test */
+    #[Test]
     public function backup_all_tenants_continues_when_one_tenant_fails(): void
     {
         config(['vanguard.queue.enabled' => false]);
@@ -367,7 +368,7 @@ class BackupManagerTest extends TestCase
     // FTP destination
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function backup_landlord_includes_ftp_in_destinations_when_enabled(): void
     {
         config(['vanguard.sources.landlord_database' => false]);
@@ -387,7 +388,7 @@ class BackupManagerTest extends TestCase
         $this->assertContains('ftp', $record->destinations);
     }
 
-    /** @test */
+    #[Test]
     public function backup_landlord_does_not_include_ftp_in_destinations_when_disabled(): void
     {
         config(['vanguard.sources.landlord_database' => false]);
@@ -407,7 +408,7 @@ class BackupManagerTest extends TestCase
         $this->assertNotContains('ftp', $record->destinations);
     }
 
-    /** @test */
+    #[Test]
     public function backup_landlord_stores_ftp_path_on_completed_record(): void
     {
         config(['vanguard.sources.landlord_database' => false]);
@@ -426,7 +427,7 @@ class BackupManagerTest extends TestCase
         $this->assertSame('vanguard-backups/l_ftp.tar', $record->ftp_path);
     }
 
-    /** @test */
+    #[Test]
     public function backup_landlord_ftp_path_is_null_when_ftp_not_used(): void
     {
         config(['vanguard.sources.landlord_database' => false]);

@@ -4,6 +4,7 @@ namespace SoftArtisan\Vanguard\Tests\Feature;
 
 use Illuminate\Console\Scheduling\Schedule;
 use Mockery;
+use PHPUnit\Framework\Attributes\Test;
 use SoftArtisan\Vanguard\Console\VanguardScheduler;
 use SoftArtisan\Vanguard\Services\TenancyResolver;
 use SoftArtisan\Vanguard\Tests\TestCase;
@@ -20,7 +21,7 @@ class VanguardSchedulerTest extends TestCase
     // Scheduling disabled
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function scheduler_registers_no_events_when_disabled(): void
     {
         config(['vanguard.schedule.enabled' => false]);
@@ -41,7 +42,7 @@ class VanguardSchedulerTest extends TestCase
     // Scheduling enabled
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function scheduler_registers_landlord_command_when_enabled(): void
     {
         config([
@@ -84,7 +85,7 @@ class VanguardSchedulerTest extends TestCase
         $this->addToAssertionCount(1); // Mockery expectations count as assertions
     }
 
-    /** @test */
+    #[Test]
     public function scheduler_registers_per_tenant_commands(): void
     {
         config([
@@ -136,7 +137,7 @@ class VanguardSchedulerTest extends TestCase
         $this->addToAssertionCount(1); // Mockery expectations count as assertions
     }
 
-    /** @test */
+    #[Test]
     public function scheduler_uses_tenant_custom_cron_when_set(): void
     {
         config([
@@ -188,7 +189,7 @@ class VanguardSchedulerTest extends TestCase
     // Cron expression resolution
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function cron_expression_matches_frequency_setting(): void
     {
         $scheduler = new VanguardScheduler(Mockery::mock(TenancyResolver::class));
@@ -208,7 +209,7 @@ class VanguardSchedulerTest extends TestCase
         $this->assertSame('*/15 * * * *', $method->invoke($scheduler));
     }
 
-    /** @test */
+    #[Test]
     public function retention_prune_is_registered_when_enabled(): void
     {
         config([

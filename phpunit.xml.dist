@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Versioned default PHPUnit configuration.
+
+    PHPUnit reads phpunit.xml first and falls back to this file, so a developer
+    may drop an untracked phpunit.xml next to it to override anything locally.
+    This .dist file is what makes `composer test` work on a fresh clone.
+-->
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+         bootstrap="vendor/autoload.php"
+         colors="true"
+         stopOnFailure="false"
+         processIsolation="false"
+>
+    <!-- Suite names are contractual: composer test:unit and test:feature select them by name. -->
+    <testsuites>
+        <testsuite name="Unit">
+            <directory>tests/Unit</directory>
+        </testsuite>
+        <testsuite name="Feature">
+            <directory>tests/Feature</directory>
+        </testsuite>
+    </testsuites>
+
+    <php>
+        <env name="APP_ENV"       value="testing"/>
+        <env name="APP_KEY"       value="base64:CshdBy2FZ6sSFJriddRAadH2ibzw8Q6FadHxxmCjghk="/>
+        <env name="DB_CONNECTION" value="sqlite"/>
+        <env name="DB_DATABASE"   value=":memory:"/>
+        <env name="CACHE_DRIVER"  value="array"/>
+        <env name="QUEUE_CONNECTION" value="sync"/>
+
+        <!-- Vanguard defaults for tests -->
+        <env name="VANGUARD_TENANCY_ENABLED" value="false"/>
+        <env name="VANGUARD_QUEUE_ENABLED"   value="false"/>
+        <env name="VANGUARD_SCHEDULE_ENABLED" value="false"/>
+    </php>
+</phpunit>

@@ -4,6 +4,7 @@ namespace SoftArtisan\Vanguard\Tests\Feature;
 
 use Illuminate\Support\Facades\Event;
 use Mockery;
+use PHPUnit\Framework\Attributes\Test;
 use SoftArtisan\Vanguard\Models\BackupRecord;
 use SoftArtisan\Vanguard\Services\BackupManager;
 use SoftArtisan\Vanguard\Services\TenancyResolver;
@@ -30,7 +31,7 @@ class DashboardTest extends TestCase
     // Auth middleware
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function dashboard_returns_403_when_auth_gate_denies(): void
     {
         Vanguard::auth(fn ($request) => false);
@@ -38,7 +39,7 @@ class DashboardTest extends TestCase
         $this->get('/vanguard')->assertStatus(403);
     }
 
-    /** @test */
+    #[Test]
     public function dashboard_is_accessible_when_auth_gate_passes(): void
     {
         $this->get('/vanguard')->assertStatus(200);
@@ -48,7 +49,7 @@ class DashboardTest extends TestCase
     // GET /vanguard/api/stats
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function stats_endpoint_returns_correct_structure(): void
     {
         $this->makeRecord(['status' => 'completed', 'file_size' => 1024 * 500]);
@@ -78,7 +79,7 @@ class DashboardTest extends TestCase
         $this->assertSame(1, $data['running_backups']);
     }
 
-    /** @test */
+    #[Test]
     public function stats_endpoint_counts_tenants_when_tenancy_enabled(): void
     {
         $tenancy = Mockery::mock(TenancyResolver::class);
@@ -99,7 +100,7 @@ class DashboardTest extends TestCase
     // GET /vanguard/api/backups
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function backups_endpoint_returns_paginated_records(): void
     {
         $this->makeRecord(['status' => 'completed', 'type' => 'landlord']);
@@ -118,7 +119,7 @@ class DashboardTest extends TestCase
         $this->assertSame(2, $response->json('meta.total'));
     }
 
-    /** @test */
+    #[Test]
     public function backups_endpoint_filters_by_tenant_id(): void
     {
         $this->makeRecord(['tenant_id' => 'acme']);
@@ -131,7 +132,7 @@ class DashboardTest extends TestCase
         $this->assertSame(2, $response->json('meta.total'));
     }
 
-    /** @test */
+    #[Test]
     public function backups_endpoint_filters_by_status(): void
     {
         $this->makeRecord(['status' => 'completed']);
@@ -148,7 +149,7 @@ class DashboardTest extends TestCase
     // GET /vanguard/api/tenants
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function tenants_endpoint_returns_empty_when_tenancy_disabled(): void
     {
         $tenancy = Mockery::mock(TenancyResolver::class);
@@ -161,7 +162,7 @@ class DashboardTest extends TestCase
         $this->assertEmpty($response->json('tenants'));
     }
 
-    /** @test */
+    #[Test]
     public function tenants_endpoint_returns_tenant_list_with_backup_counts(): void
     {
         $this->makeRecord(['tenant_id' => 'acme', 'status' => 'completed']);
@@ -193,21 +194,21 @@ class DashboardTest extends TestCase
     // POST /vanguard/api/backups/run
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function run_endpoint_validates_required_type(): void
     {
         $this->postJson('/vanguard/api/backups/run', [])
             ->assertStatus(422);
     }
 
-    /** @test */
+    #[Test]
     public function run_endpoint_requires_tenant_id_when_type_is_tenant(): void
     {
         $this->postJson('/vanguard/api/backups/run', ['type' => 'tenant'])
             ->assertStatus(422);
     }
 
-    /** @test */
+    #[Test]
     public function run_endpoint_triggers_landlord_backup(): void
     {
         config(['vanguard.queue.enabled' => false]);
@@ -224,7 +225,7 @@ class DashboardTest extends TestCase
             ->assertJsonStructure(['record']);
     }
 
-    /** @test */
+    #[Test]
     public function run_endpoint_triggers_filesystem_backup(): void
     {
         config(['vanguard.queue.enabled' => false]);
@@ -240,7 +241,7 @@ class DashboardTest extends TestCase
             ->assertOk();
     }
 
-    /** @test */
+    #[Test]
     public function run_endpoint_returns_500_when_backup_fails(): void
     {
         config(['vanguard.queue.enabled' => false]);
@@ -261,7 +262,7 @@ class DashboardTest extends TestCase
     // DELETE /vanguard/api/backups/{id}
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function destroy_endpoint_deletes_record(): void
     {
         $record = $this->makeRecord(['file_path' => null]);
@@ -273,7 +274,7 @@ class DashboardTest extends TestCase
         $this->assertNull(BackupRecord::find($record->id));
     }
 
-    /** @test */
+    #[Test]
     public function destroy_endpoint_returns_404_for_unknown_record(): void
     {
         $this->deleteJson('/vanguard/api/backups/99999')
@@ -284,7 +285,7 @@ class DashboardTest extends TestCase
     // POST /vanguard/api/backups/{id}/restore
     // ─────────────────────────────────────────────────────────────
 
-    /** @test */
+    #[Test]
     public function restore_endpoint_calls_restore_service(): void
     {
         $record = $this->makeRecord(['type' => 'landlord', 'file_path' => 'path.tar']);
@@ -301,7 +302,7 @@ class DashboardTest extends TestCase
             ->assertJsonStructure(['message']);
     }
 
-    /** @test */
+    #[Test]
     public function restore_endpoint_returns_500_on_error(): void
     {
         $record = $this->makeRecord(['type' => 'landlord', 'file_path' => 'path.tar']);
