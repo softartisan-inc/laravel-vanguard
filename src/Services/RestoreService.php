@@ -33,7 +33,8 @@ class RestoreService
      *                          - 'verify_checksum' (bool)   — default true
      *                          - 'restore_db'      (bool)   — default true
      *                          - 'restore_storage' (bool)   — default false (opt-in, destructive)
-     *                          - 'source'          (string) — 'local' | 'remote' | 'ftp', default 'local'
+     *                          - 'source'          (string) — 'local' | 'remote' | 'ftp'; omit it to
+     *                            read from the first destination the backup actually reached
      * @return bool  true on success
      *
      * @throws RuntimeException
@@ -43,21 +44,13 @@ class RestoreService
         $verify         = $options['verify_checksum'] ?? true;
         $restoreDb      = $options['restore_db']      ?? true;
         $restoreStorage = $options['restore_storage'] ?? false; // opt-in: dangerous
-        $destination    = $options['source']          ?? 'local'; // 'local' | 'remote' | 'ftp'
+        $destination    = $options['source']          ?? null; // 'local' | 'remote' | 'ftp', null to auto-detect
 
         if ($record->isFailed() || $record->isRunning()) {
             throw new RuntimeException("Cannot restore a backup with status [{$record->status}].");
         }
 
-        $storedPath = match ($destination) {
-            'remote' => $record->remote_path,
-            'ftp'    => $record->ftp_path,
-            default  => $record->file_path,
-        };
-
-        if (! $storedPath) {
-            throw new RuntimeException("No file path available for backup #{$record->id} on destination [{$destination}].");
-        }
+        [$destination, $storedPath] = $this->resolveSource($record, $destination);
 
         try {
             Log::info('[Vanguard] Starting restore', ['record_id' => $record->id]);
@@ -91,6 +84,58 @@ class RestoreService
         } finally {
             $this->store->cleanTmp();
         }
+    }
+
+    /**
+     * Resolve which destination the bundle is read back from.
+     *
+     * Without an explicit choice, the first destination that actually holds a
+     * path wins, local first since it needs no download. Defaulting blindly to
+     * local made restores impossible on the recommended production setup,
+     * where local is disabled and only the remote copy exists.
+     *
+     * An explicit choice is honoured as given, so a caller can still force the
+     * remote copy even when a local one is present.
+     *
+     * @param  BackupRecord  $record
+     * @param  string|null   $requested  'local', 'remote', 'ftp', or null to auto-detect
+     * @return array{0: string, 1: string}  The resolved destination and its stored path
+     *
+     * @throws RuntimeException When the requested destination holds no path, or
+     *                          when the backup reached no destination at all.
+     */
+    protected function resolveSource(BackupRecord $record, ?string $requested): array
+    {
+        $paths = array_filter([
+            'local'  => $record->file_path,
+            'remote' => $record->remote_path,
+            'ftp'    => $record->ftp_path,
+        ]);
+
+        if ($requested !== null) {
+            if (! isset($paths[$requested])) {
+                throw new RuntimeException(sprintf(
+                    'No file path available for backup #%d on destination [%s]. %s',
+                    $record->id,
+                    $requested,
+                    $paths
+                        ? 'Available: '.implode(', ', array_keys($paths)).'.'
+                        : 'This backup reached no destination at all.'
+                ));
+            }
+
+            return [$requested, $paths[$requested]];
+        }
+
+        if ($paths === []) {
+            throw new RuntimeException(
+                "Backup #{$record->id} has no stored file on any destination."
+            );
+        }
+
+        $destination = array_key_first($paths);
+
+        return [$destination, $paths[$destination]];
     }
 
     /**

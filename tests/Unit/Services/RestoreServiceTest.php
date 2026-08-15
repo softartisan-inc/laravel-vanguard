@@ -69,12 +69,16 @@ class RestoreServiceTest extends TestCase
     }
 
     /** @test */
-    public function it_throws_when_no_file_path_is_set(): void
+    public function it_throws_when_the_backup_reached_no_destination_at_all(): void
     {
-        $record = $this->makeRecord(['file_path' => null, 'remote_path' => null]);
+        $record = $this->makeRecord([
+            'file_path'   => null,
+            'remote_path' => null,
+            'ftp_path'    => null,
+        ]);
 
         $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessageMatches('/No file path available/');
+        $this->expectExceptionMessageMatches('/has no stored file on any destination/');
 
         $this->restoreService->restore($record);
     }
@@ -364,6 +368,75 @@ class RestoreServiceTest extends TestCase
         $this->restoreService->restore($record, [
             'verify_checksum' => false,
             'source'          => 'ftp',
+        ]);
+    }
+
+    /** @test */
+    public function it_falls_back_to_the_remote_copy_when_no_local_one_exists(): void
+    {
+        // The recommended production setup: local disabled, remote only.
+        $record = $this->makeRecord([
+            'type'        => 'landlord',
+            'file_path'   => null,
+            'remote_path' => 'backups/remote.tar',
+            'checksum'    => null,
+        ]);
+
+        $this->store->shouldReceive('download')
+            ->once()
+            ->with('backups/remote.tar', 'remote')
+            ->andReturn('/tmp/remote.tar');
+
+        $this->store->shouldReceive('unBundle')->once()->andReturn([]);
+
+        $result = $this->restoreService->restore($record, [
+            'verify_checksum' => false,
+            'restore_db'      => false,
+        ]);
+
+        $this->assertTrue($result);
+    }
+
+    /** @test */
+    public function it_falls_back_to_the_ftp_copy_when_it_is_the_only_one(): void
+    {
+        $record = $this->makeRecord([
+            'type'        => 'landlord',
+            'file_path'   => null,
+            'remote_path' => null,
+            'ftp_path'    => 'backups/ftp.tar',
+            'checksum'    => null,
+        ]);
+
+        $this->store->shouldReceive('download')
+            ->once()
+            ->with('backups/ftp.tar', 'ftp')
+            ->andReturn('/tmp/ftp.tar');
+
+        $this->store->shouldReceive('unBundle')->once()->andReturn([]);
+
+        $result = $this->restoreService->restore($record, [
+            'verify_checksum' => false,
+            'restore_db'      => false,
+        ]);
+
+        $this->assertTrue($result);
+    }
+
+    /** @test */
+    public function it_lists_the_available_destinations_when_the_requested_one_is_empty(): void
+    {
+        $record = $this->makeRecord([
+            'file_path'   => null,
+            'remote_path' => 'backups/remote.tar',
+        ]);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessageMatches('/\[local\].*Available: remote/');
+
+        $this->restoreService->restore($record, [
+            'verify_checksum' => false,
+            'source'          => 'local',
         ]);
     }
 
