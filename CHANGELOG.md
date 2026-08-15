@@ -1,9 +1,45 @@
 # Changelog
 
-All notable changes to `softartisan/vanguard` are documented here.
+All notable changes to `softartisan/laravel-vanguard` are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+---
+
+## [2.0.0] — 2026-08-15
+
+Three failures this release fixes were silent: a dump that died halfway was still
+recorded as a successful backup, filesystem archives restored into a junk tree
+instead of their original location, and `composer test` ran nothing at all on a
+fresh clone. Read the upgrade guide in the README before upgrading.
+
+### Changed
+- **BREAKING — supported stack**: requires PHP `^8.3` and Laravel `^12.0`. PHP 8.1/8.2 and Laravel 10/11 are no longer supported. Laravel 11 is dropped rather than merely untested: every 11.x release carries open security advisories that Composer will not resolve around, and a backup package has no business shipping a pipeline that waives them.
+- **BREAKING — filesystem archive format**: archives are now created relative to a base directory instead of storing absolute paths. Archives written by 1.x remain restorable — extraction detects the legacy layout from the archive itself and strips the right prefix, deriving the depth from the member names rather than assuming it.
+- **A broken dump now fails loudly.** A backup that 1.x reported as successful may start failing after this upgrade; that is the bug being fixed, not a regression.
+- MySQL dumps run through `proc_open` instead of a shell pipeline, with `--single-transaction --quick --routines --triggers --no-tablespaces` by default: writes are no longer blocked during a dump, and stored procedures and triggers are included.
+- Tests are declared with the `#[Test]` attribute instead of `/** @test */` doc-comments, which PHPUnit 12 no longer reads.
+
+### Added
+- `vanguard:restore --wipe-storage` empties the backed-up directories before extracting, so a filesystem restore can replace instead of merge. Only the paths listed in `vanguard.sources.filesystem_paths` are touched; a configured path that would escape `storage_path()` is skipped and logged. The option refuses to run without `--restore-storage` and asks a second confirmation naming the directories it is about to erase. Merging remains the default, and the HTTP API deliberately does not expose the option.
+- `GzipDumpWriter` — the single place that knows how a dump reaches disk, so dump failures cannot be masked by the compression step that follows them.
+- Versioned `phpunit.xml.dist`, which is what makes `composer test` work on a clone. `phpunit.xml` stays ignored as a local override, with the ignore rule anchored so it cannot swallow the `.dist`.
+- CI matrix covering PHP 8.3, 8.4 and 8.5 against Laravel 12.
+
+### Fixed
+- **A failed dump was recorded as a successful backup.** The MySQL dump ran as `mysqldump ... 2>&1 | gzip > dest` through a shell, so the exit code checked was gzip's, not mysqldump's. A dump that died halfway still produced a file, a checksum and a `completed` record — with the error message written *inside* the `.sql.gz`. Discoverable only at restore time.
+- **A filesystem restore never put a single file back in place.** `tar` was handed absolute paths with no `-C`, so members were stored as `var/www/html/storage/app/...`; extracting with `-C storage_path()` recreated that whole chain, leaving files at `storage/var/www/html/storage/app/`. Archiving and extraction are now symmetric. Excludes are rewritten relative to the same base, since `tar` cannot match absolute exclude patterns against relative members.
+- The PDO fallback used when `mysqldump` is unavailable now streams unbuffered (`MYSQL_ATTR_USE_BUFFERED_QUERY = false`). Its comment claimed row-by-row streaming while PDO MySQL buffers by default, loading whole tables into memory before iterating.
+- `composer test` ran `phpunit` with no arguments while `phpunit.xml` was gitignored: on a fresh clone PHPUnit found no configuration, printed its help and exited without running anything. The suite also used doc-comment annotations exclusively — 209 `@test`, not one test-prefixed method — so a PHPUnit 12 upgrade would have collected zero tests while CI reported success.
+- Install instructions named `softartisan/vanguard`; the package has been `softartisan/laravel-vanguard` since it was renamed.
+
+---
+
+## [1.2.0] — 2026-08-15
+
+### Fixed
+- **A backup stored only on a remote destination could not be restored.** `vanguard:restore` had no `--source` option and `RestoreService` fell back to `local`, so it looked for a `file_path` that is empty whenever local storage is disabled, failing with `No file path available for backup #X on destination [local]`. The command now takes `--source=local|remote|ftp` and, without it, reads the bundle from the first destination the backup actually reached.
 
 ---
 
