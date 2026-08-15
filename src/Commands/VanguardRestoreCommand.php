@@ -10,6 +10,7 @@ class VanguardRestoreCommand extends Command
 {
     protected $signature = 'vanguard:restore
                             {id : The backup record ID to restore}
+                            {--source= : Read the bundle from local, remote or ftp (default: the first destination the backup reached)}
                             {--no-verify : Skip checksum verification}
                             {--no-db : Skip database restore}
                             {--restore-storage : Also restore filesystem (dangerous)}
@@ -55,6 +56,7 @@ class VanguardRestoreCommand extends Command
                 'verify_checksum' => ! $this->option('no-verify'),
                 'restore_db'      => ! $this->option('no-db'),
                 'restore_storage' => $this->option('restore-storage'),
+                'source'          => $this->option('source') ?: null,
             ]);
 
             $this->info('✅ Restore completed successfully.');

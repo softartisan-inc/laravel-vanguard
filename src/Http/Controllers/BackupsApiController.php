@@ -246,7 +246,10 @@ class BackupsApiController extends Controller
                 'verify_checksum' => $request->boolean('verify_checksum', true),
                 'restore_db'      => $request->boolean('restore_db', true),
                 'restore_storage' => $request->boolean('restore_storage', false),
-                'source'          => $request->input('source', 'local'),
+                // No default: let the service pick the first destination the
+                // backup actually reached. Forcing 'local' broke restores on
+                // setups where only the remote copy exists.
+                'source'          => $request->input('source'),
             ]);
             return response()->json(['message' => 'Restore completed successfully.']);
         } catch (\Throwable $e) {
