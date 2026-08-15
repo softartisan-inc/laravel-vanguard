@@ -223,6 +223,30 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Dump Options
+    |--------------------------------------------------------------------------
+    | Options passed to mysqldump on every MySQL/MariaDB dump.
+    |
+    | The defaults keep the dump consistent without locking the tables
+    | (--single-transaction), stream rows instead of buffering them (--quick),
+    | and include stored procedures and triggers (--routines --triggers).
+    | --no-tablespaces avoids the PROCESS privilege requirement of MySQL 8.
+    |
+    | --events is intentionally left out: it requires the EVENT privilege,
+    | which managed and restricted database accounts often lack, and the dump
+    | would fail outright. Add it here if your account has that privilege.
+    |
+    | Accepts a space-separated string or an array of options.
+    */
+    'dump' => [
+        'mysql_options' => env(
+            'VANGUARD_MYSQL_DUMP_OPTIONS',
+            '--single-transaction --quick --routines --triggers --no-tablespaces',
+        ),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Binary Paths
     |--------------------------------------------------------------------------
     | Absolute paths to the CLI tools used during backup and restore.

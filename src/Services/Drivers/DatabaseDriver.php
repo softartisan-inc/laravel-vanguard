@@ -7,6 +7,18 @@ use RuntimeException;
 class DatabaseDriver
 {
     /**
+     * Fallback mysqldump options, used when the published config predates the
+     * 'dump' section and therefore has no 'mysql_options' key.
+     */
+    protected const DEFAULT_MYSQL_DUMP_OPTIONS = '--single-transaction --quick --routines --triggers --no-tablespaces';
+
+    /** Maximum number of rows grouped into a single INSERT by the PDO fallback. */
+    protected const PDO_INSERT_MAX_ROWS = 100;
+
+    /** Maximum byte size of the values of a single INSERT built by the PDO fallback. */
+    protected const PDO_INSERT_MAX_BYTES = 1048576; // 1 MB
+
+    /**
      * Dump a database to a gzipped SQL file.
      *
      * @param  string  $driver       'mysql'|'mariadb'|'pgsql'|'sqlite'
@@ -92,6 +104,11 @@ class DatabaseDriver
     /**
      * Dump MySQL via the mysqldump CLI binary.
      *
+     * mysqldump is started directly (no shell pipeline), so the exit code we
+     * check is mysqldump's own and not gzip's. Its stdout is compressed on the
+     * fly, its stderr is kept aside and only ever surfaces in the exception —
+     * never inside the archive.
+     *
      * Uses MYSQL_PWD environment variable to pass the password securely.
      */
     protected function dumpMysqlViaCli(array $c, string $dest, string $binary): void
@@ -99,17 +116,162 @@ class DatabaseDriver
         $this->setMysqlPasswordEnv($c);
 
         try {
-            $cmd = sprintf(
-                '%s %s %s 2>&1 | gzip > %s',
-                escapeshellcmd($binary),
-                $this->mysqlConnectionArgs($c),
-                escapeshellarg($c['database']),
-                escapeshellarg($dest),
-            );
-
-            $this->exec($cmd, 'mysqldump');
+            $this->runProcessToGzip($this->mysqlDumpCommand($binary, $c), $dest, 'mysqldump');
         } finally {
             $this->clearMysqlPasswordEnv();
+        }
+    }
+
+    /**
+     * Build the mysqldump command as an argument list (no shell involved).
+     *
+     * The password is intentionally absent: it is passed via MYSQL_PWD so it
+     * never shows up in the system process list.
+     *
+     * @param  string  $binary  Resolved mysqldump path or bare name
+     * @param  array   $c       Laravel MySQL connection config
+     * @return array<int, string>
+     */
+    protected function mysqlDumpCommand(string $binary, array $c): array
+    {
+        $command = [
+            $binary,
+            '-h', (string) ($c['host'] ?? '127.0.0.1'),
+            '-P', (string) ($c['port'] ?? 3306),
+            '-u', (string) ($c['username'] ?? 'root'),
+        ];
+
+        if (! empty($c['unix_socket'])) {
+            $command[] = '--socket='.$c['unix_socket'];
+        }
+
+        foreach ($this->mysqlDumpOptions() as $option) {
+            $command[] = $option;
+        }
+
+        $command[] = (string) $c['database'];
+
+        return $command;
+    }
+
+    /**
+     * Resolve the configured mysqldump options.
+     *
+     * Accepts either a space-separated string or an array in
+     * config('vanguard.dump.mysql_options').
+     *
+     * @return array<int, string>
+     */
+    protected function mysqlDumpOptions(): array
+    {
+        $configured = config('vanguard.dump.mysql_options', self::DEFAULT_MYSQL_DUMP_OPTIONS)
+            ?? self::DEFAULT_MYSQL_DUMP_OPTIONS;
+
+        if (is_string($configured)) {
+            $configured = preg_split('/\s+/', trim($configured)) ?: [];
+        }
+
+        return array_values(array_filter(
+            array_map(fn ($option) => trim((string) $option), (array) $configured),
+            fn (string $option) => $option !== '',
+        ));
+    }
+
+    /**
+     * Run a dump command and stream its stdout into a gzip file.
+     *
+     * stdout and stderr are read from separate pipes, so an error message can
+     * never end up inside the archive. The exit code is the command's own —
+     * there is no shell pipeline to mask it. On failure the partial
+     * destination file is removed so no corrupt backup survives.
+     *
+     * @param  array<int, string>  $command  Argument list, binary first
+     * @param  string              $dest     Absolute destination path (.sql.gz)
+     * @param  string              $label    Short label used in error messages
+     *
+     * @throws RuntimeException When the process cannot start, the destination
+     *                          stops accepting data, or the command exits non-zero
+     */
+    protected function runProcessToGzip(array $command, string $dest, string $label): void
+    {
+        $descriptors = [
+            0 => ['pipe', 'r'],
+            1 => ['pipe', 'w'],
+            2 => ['pipe', 'w'],
+        ];
+
+        $writer = GzipDumpWriter::open($dest, $label);
+
+        $process = @proc_open($command, $descriptors, $pipes);
+
+        if (! is_resource($process)) {
+            $writer->discard();
+
+            throw new RuntimeException("[Vanguard:{$label}] Unable to start the process.");
+        }
+
+        fclose($pipes[0]);
+        stream_set_blocking($pipes[1], false);
+        stream_set_blocking($pipes[2], false);
+
+        $stderr = '';
+        $open   = [1 => $pipes[1], 2 => $pipes[2]];
+
+        while ($open !== []) {
+            $read   = array_values($open);
+            $write  = null;
+            $except = null;
+
+            if (@stream_select($read, $write, $except, 1) === false) {
+                break;
+            }
+
+            foreach ($read as $stream) {
+                $chunk = fread($stream, 65536);
+
+                if ($chunk === false || $chunk === '') {
+                    if (feof($stream)) {
+                        unset($open[array_search($stream, $open, true)]);
+                        fclose($stream);
+                    }
+
+                    continue;
+                }
+
+                if ($stream === $pipes[1]) {
+                    try {
+                        $writer->write($chunk);
+                    } catch (RuntimeException $e) {
+                        proc_close($process);
+
+                        throw $e;
+                    }
+                } else {
+                    $stderr .= $chunk;
+                }
+            }
+        }
+
+        foreach ($open as $stream) {
+            fclose($stream);
+        }
+
+        try {
+            $writer->close();
+        } catch (RuntimeException $e) {
+            proc_close($process);
+
+            throw $e;
+        }
+
+        $exitCode = proc_close($process);
+
+        if ($exitCode !== 0) {
+            $writer->discard();
+
+            throw new RuntimeException(
+                "[Vanguard:{$label}] Command failed (exit {$exitCode}):\n".trim($stderr)
+            );
         }
     }
 
@@ -122,9 +284,67 @@ class DatabaseDriver
      * @param  array   $c     Laravel MySQL connection config
      * @param  string  $dest  Absolute destination path (.sql.gz)
      *
-     * @throws RuntimeException On PDO or gzip errors
+     * @throws RuntimeException On PDO errors, or when the destination stops accepting data
      */
     protected function dumpMysqlViaPdo(array $c, string $dest): void
+    {
+        $pdo = $this->createMysqlPdo($c);
+
+        $writer = GzipDumpWriter::open($dest, 'mysqldump-pdo');
+
+        try {
+            $db = $c['database'];
+
+            $writer->write("-- Vanguard MySQL dump (PDO fallback)\n");
+            $writer->write("-- Database: {$db}\n");
+            $writer->write("-- Generated: ".now()->toIso8601String()."\n\n");
+            $writer->write("SET FOREIGN_KEY_CHECKS=0;\n\n");
+
+            $tables = $pdo->query('SHOW TABLES')->fetchAll(\PDO::FETCH_COLUMN);
+
+            // Read every schema up front: while the connection is unbuffered no
+            // other query may run until the open result set is fully consumed.
+            $schemas = [];
+            foreach ($tables as $table) {
+                $create           = $pdo->query("SHOW CREATE TABLE `{$table}`")->fetch();
+                $schemas[$table]  = $create['Create Table'];
+            }
+
+            // PDO MySQL buffers results by default, so "SELECT * FROM table"
+            // would pull the whole table into PHP memory before the first row
+            // is written. Unbuffered mode makes the read a real stream.
+            $pdo->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
+
+            try {
+                foreach ($tables as $table) {
+                    $writer->write("DROP TABLE IF EXISTS `{$table}`;\n");
+                    $writer->write($schemas[$table].";\n\n");
+
+                    $this->writeTableDataViaPdo($pdo, $writer, $table);
+                }
+            } finally {
+                $pdo->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, true);
+            }
+
+            $writer->write("SET FOREIGN_KEY_CHECKS=1;\n");
+        } catch (\Throwable $e) {
+            // The write failures already removed their partial file; anything
+            // else (a PDO error) only needs the handle released, exactly as the
+            // previous gzclose() in a finally block did.
+            $writer->abort();
+
+            throw $e;
+        }
+
+        $writer->close();
+    }
+
+    /**
+     * Open the PDO connection used by the MySQL fallback dump.
+     *
+     * @param  array  $c  Laravel MySQL connection config
+     */
+    protected function createMysqlPdo(array $c): \PDO
     {
         $dsn = sprintf(
             'mysql:host=%s;port=%s;dbname=%s;charset=%s',
@@ -134,59 +354,57 @@ class DatabaseDriver
             $c['charset']  ?? 'utf8mb4',
         );
 
-        $pdo = new \PDO($dsn, $c['username'] ?? 'root', $c['password'] ?? '', [
+        return new \PDO($dsn, $c['username'] ?? 'root', $c['password'] ?? '', [
             \PDO::ATTR_ERRMODE            => \PDO::ERRMODE_EXCEPTION,
             \PDO::ATTR_DEFAULT_FETCH_MODE => \PDO::FETCH_ASSOC,
         ]);
+    }
 
-        $gz = @gzopen($dest, 'wb9');
-        if ($gz === false) {
-            throw new RuntimeException("Cannot open gzip destination: {$dest}");
+    /**
+     * Stream one table's rows into the gzip handle as multi-row INSERTs.
+     *
+     * Rows are grouped into batches so the dump stays small and replays much
+     * faster than one statement per row.
+     *
+     * @param  \PDO            $pdo     Connection, already switched to unbuffered reads
+     * @param  GzipDumpWriter  $writer  Open dump writer
+     * @param  string          $table   Table name
+     */
+    protected function writeTableDataViaPdo(\PDO $pdo, GzipDumpWriter $writer, string $table): void
+    {
+        $statement = $pdo->query("SELECT * FROM `{$table}`");
+
+        $batch      = [];
+        $batchBytes = 0;
+        $wroteAny   = false;
+
+        foreach ($statement as $row) {
+            $values = array_map(
+                fn ($v) => $v === null ? 'NULL' : $pdo->quote((string) $v),
+                $row,
+            );
+
+            $tuple        = '('.implode(',', $values).')';
+            $batch[]      = $tuple;
+            $batchBytes  += strlen($tuple);
+
+            if (count($batch) >= self::PDO_INSERT_MAX_ROWS || $batchBytes >= self::PDO_INSERT_MAX_BYTES) {
+                $writer->write("INSERT INTO `{$table}` VALUES ".implode(',', $batch).";\n");
+                $batch      = [];
+                $batchBytes = 0;
+                $wroteAny   = true;
+            }
         }
 
-        try {
-            $db = $c['database'];
+        if ($batch !== []) {
+            $writer->write("INSERT INTO `{$table}` VALUES ".implode(',', $batch).";\n");
+            $wroteAny = true;
+        }
 
-            gzwrite($gz, "-- Vanguard MySQL dump (PDO fallback)\n");
-            gzwrite($gz, "-- Database: {$db}\n");
-            gzwrite($gz, "-- Generated: ".now()->toIso8601String()."\n\n");
-            gzwrite($gz, "SET FOREIGN_KEY_CHECKS=0;\n\n");
+        $statement->closeCursor();
 
-            $tables = $pdo->query('SHOW TABLES')->fetchAll(\PDO::FETCH_COLUMN);
-
-            foreach ($tables as $table) {
-                // Schema
-                $create = $pdo->query("SHOW CREATE TABLE `{$table}`")->fetch();
-                gzwrite($gz, "DROP TABLE IF EXISTS `{$table}`;\n");
-                gzwrite($gz, $create['Create Table'].";\n\n");
-
-                // Data — stream row by row to limit memory usage
-                $rows = $pdo->query("SELECT * FROM `{$table}`");
-                $count = 0;
-
-                foreach ($rows as $row) {
-                    $values = array_map(
-                        fn ($v) => $v === null ? 'NULL' : $pdo->quote((string) $v),
-                        $row,
-                    );
-
-                    gzwrite($gz, "INSERT INTO `{$table}` VALUES (".implode(',', $values).");\n");
-                    $count++;
-
-                    // Flush every 500 rows to avoid large write buffers
-                    if ($count % 500 === 0) {
-                        gzwrite($gz, "\n");
-                    }
-                }
-
-                if ($count > 0) {
-                    gzwrite($gz, "\n");
-                }
-            }
-
-            gzwrite($gz, "SET FOREIGN_KEY_CHECKS=1;\n");
-        } finally {
-            gzclose($gz);
+        if ($wroteAny) {
+            $writer->write("\n");
         }
     }
 
@@ -366,9 +584,11 @@ class DatabaseDriver
             foreach ($pdo->query("SELECT sql FROM sqlite_master WHERE sql IS NOT NULL") as $row) {
                 $sql .= $row['sql'].";\n";
             }
-            $gz = gzopen($dest, 'wb9');
-            gzwrite($gz, $sql ?: "-- empty database\n");
-            gzclose($gz);
+            // The writer cleans up its own partial file when a write fails.
+            $writer = GzipDumpWriter::open($dest, 'sqlite');
+            $writer->write($sql ?: "-- empty database\n");
+            $writer->close();
+
             return;
         }
 
