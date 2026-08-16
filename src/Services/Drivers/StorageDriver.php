@@ -297,11 +297,41 @@ class StorageDriver
      */
     public function resolveBackupPaths(): array
     {
-        return collect(config('vanguard.sources.filesystem_paths', ['app']))
-            ->map(fn ($p) => storage_path($p))
-            ->filter(fn ($p) => is_dir($p))
-            ->values()
-            ->all();
+        // The same rule the restore side already applies before wiping: an
+        // entry must resolve strictly below storage_path(). Without it, a
+        // stray '..' or an empty string named the server directory itself and
+        // the archive quietly became everything on the machine — the read side
+        // had no guard at all while the destructive side had one.
+        $root = realpath(storage_path()) ?: rtrim(storage_path(), DIRECTORY_SEPARATOR);
+
+        $paths = [];
+
+        foreach ((array) config('vanguard.sources.filesystem_paths', ['app']) as $relative) {
+            $resolved = realpath(rtrim(storage_path((string) $relative), DIRECTORY_SEPARATOR));
+
+            // Absent on disk: nothing to archive, and nothing to warn about —
+            // a path configured for a sibling installation is not a fault.
+            if ($resolved === false) {
+                continue;
+            }
+
+            $resolved = rtrim($resolved, DIRECTORY_SEPARATOR);
+
+            if (! str_starts_with($resolved.DIRECTORY_SEPARATOR, $root.DIRECTORY_SEPARATOR) || $resolved === $root) {
+                Log::warning('[Vanguard] Refusing to archive a path outside storage_path()', [
+                    'configured' => $relative,
+                    'resolved' => $resolved,
+                ]);
+
+                continue;
+            }
+
+            if (is_dir($resolved)) {
+                $paths[] = $resolved;
+            }
+        }
+
+        return array_values(array_unique($paths));
     }
 
     /**

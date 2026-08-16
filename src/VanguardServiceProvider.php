@@ -88,6 +88,37 @@ class VanguardServiceProvider extends ServiceProvider
         $this->registerScheduler();
         $this->registerNotificationListeners();
         $this->validateDestinationDisks();
+        $this->validateFilesystemPaths();
+    }
+
+    /**
+     * Warn at boot about a filesystem_paths entry that cannot be archived.
+     *
+     * StorageDriver drops these entries so nothing dangerous ends up in the
+     * archive, but a backup that silently omits a source is the failure mode
+     * this package exists to stop. The complaint belongs at boot, where
+     * somebody is reading, rather than at 2am where nobody is.
+     */
+    protected function validateFilesystemPaths(): void
+    {
+        foreach ((array) config('vanguard.sources.filesystem_paths', ['app']) as $configured) {
+            $path = trim(str_replace('\\', '/', (string) $configured));
+            $segments = array_filter(explode('/', $path), fn ($s) => $s !== '' && $s !== '.');
+
+            $unsafe = match (true) {
+                $segments === [] => 'it names storage_path() itself rather than a directory inside it',
+                in_array('..', $segments, true) => 'it climbs out of storage_path() with a ".." segment',
+                str_starts_with($path, '/') => 'it is an absolute path, and entries are resolved relative to storage_path()',
+                default => null,
+            };
+
+            if ($unsafe !== null) {
+                Log::warning(
+                    "[Vanguard] The filesystem_paths entry is unsafe and will be skipped: {$unsafe}.",
+                    ['configured' => $configured],
+                );
+            }
+        }
     }
 
     /**
