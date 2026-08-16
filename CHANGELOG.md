@@ -7,6 +7,16 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
+## [2.1.0] — 2026-08-16
+
+### Added
+- **`vanguard:install` reports config drift.** `vendor:publish` never overwrites an existing `config/vanguard.php`, so upgrading leaves an older config in place and the keys added since are simply absent. Every read has a default, which sounds harmless until the default is "empty": a config published before 2.0.1 has no `notifications` block, so `mail.to` resolves to null and no alert is ever sent. The command now names each missing setting, or confirms the config is current.
+
+### Fixed
+- `vanguard:install` pointed at a repository name the package no longer uses.
+
+---
+
 ## [2.0.1] — 2026-08-16
 
 Everything below was found by exercising the package against a real MariaDB
