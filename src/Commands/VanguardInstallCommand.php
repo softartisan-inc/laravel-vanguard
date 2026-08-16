@@ -7,6 +7,7 @@ use Illuminate\Console\Command;
 class VanguardInstallCommand extends Command
 {
     protected $signature = 'vanguard:install';
+
     protected $description = 'Install Vanguard — publish config and run migrations';
 
     /**
@@ -15,7 +16,7 @@ class VanguardInstallCommand extends Command
      * Verifies system requirements, publishes the config and migration stubs,
      * runs migrations, then prints actionable next steps.
      *
-     * @return int  Command::SUCCESS
+     * @return int Command::SUCCESS
      */
     public function handle(): int
     {
@@ -44,8 +45,8 @@ class VanguardInstallCommand extends Command
     protected function printNextSteps(): void
     {
         $timeout = (int) config('vanguard.queue.timeout', 3600);
-        $queue   = config('vanguard.queue.queue', 'vanguard');
-        $conn    = config('vanguard.queue.connection') ?? 'redis';
+        $queue = config('vanguard.queue.queue', 'vanguard');
+        $conn = config('vanguard.queue.connection') ?? 'redis';
 
         $this->line('📋 <comment>Next steps:</comment>');
         $this->newLine();
@@ -68,7 +69,7 @@ class VanguardInstallCommand extends Command
         $this->line("     <comment>    'processes'  => 2,</comment>");
         $this->line("     <comment>    'tries'      => 3,</comment>");
         $this->line("     <comment>    'timeout'    => {$timeout},</comment>");
-        $this->line("     <comment>],</comment>");
+        $this->line('     <comment>],</comment>');
         $this->newLine();
 
         $this->line('  <info>4. FTP/SFTP destination</info> — if you plan to use VANGUARD_FTP_ENABLED=true:');
@@ -82,7 +83,7 @@ class VanguardInstallCommand extends Command
         $this->line("     <comment>    'username' => env('FTP_USERNAME'),</comment>");
         $this->line("     <comment>    'password' => env('FTP_PASSWORD'),</comment>");
         $this->line("     <comment>    'port'     => 21,</comment>");
-        $this->line("     <comment>],</comment>");
+        $this->line('     <comment>],</comment>');
         $this->newLine();
 
         $this->line('  <info>5. Environment variables</info> — add to <comment>.env</comment> as needed:');
@@ -90,6 +91,11 @@ class VanguardInstallCommand extends Command
         $this->line('     <comment>VANGUARD_QUEUE_NAME=vanguard</comment>');
         $this->line('     <comment>VANGUARD_QUEUE_TIMEOUT=3600</comment>');
         $this->line('     <comment>VANGUARD_RETENTION_DAYS=30</comment>');
+        $this->line('     <comment># Keep a copy on the server itself (default true):</comment>');
+        $this->line('     <comment>VANGUARD_LOCAL_ENABLED=true</comment>');
+        $this->line('     <comment># Alerts — without an address a failing backup stays silent:</comment>');
+        $this->line('     <comment>VANGUARD_NOTIFY_FAILURE=true</comment>');
+        $this->line('     <comment>VANGUARD_NOTIFY_MAIL=ops@example.com</comment>');
         $this->line('     # Remote (S3):');
         $this->line('     <comment>VANGUARD_REMOTE_ENABLED=false</comment>');
         $this->line('     <comment>VANGUARD_REMOTE_DISK=s3</comment>');
@@ -105,7 +111,7 @@ class VanguardInstallCommand extends Command
         $this->newLine();
 
         $this->line('  Visit <comment>'.url(config('vanguard.path', 'vanguard')).'</comment> to access the dashboard.');
-        $this->line('  📖 Documentation: https://github.com/softartisan/vanguard');
+        $this->line('  📖 Documentation: https://github.com/softartisan-inc/laravel-vanguard');
         $this->newLine();
     }
 
@@ -120,7 +126,7 @@ class VanguardInstallCommand extends Command
     {
         $destinations = [
             'remote' => 'vanguard.destinations.remote',
-            'ftp'    => 'vanguard.destinations.ftp',
+            'ftp' => 'vanguard.destinations.ftp',
         ];
 
         foreach ($destinations as $label => $key) {
@@ -133,7 +139,7 @@ class VanguardInstallCommand extends Command
             if (empty(config("filesystems.disks.{$disk}"))) {
                 $this->newLine();
                 $this->warn("⚠  The {$label} destination is enabled but disk [{$disk}] is not declared in config/filesystems.php.");
-                $this->warn("   Add the disk configuration before running backups (see step 4 of next steps).");
+                $this->warn('   Add the disk configuration before running backups (see step 4 of next steps).');
             }
         }
     }
@@ -150,10 +156,10 @@ class VanguardInstallCommand extends Command
         $this->line('Checking system requirements...');
 
         $tools = [
-            'tar'      => 'Required for bundling backup archives.',
-            'gzip'     => 'Required for compressing backup files.',
+            'tar' => 'Required for bundling backup archives.',
+            'gzip' => 'Required for compressing backup files.',
             'mysqldump' => 'Required for MySQL database backups.',
-            'pg_dump'  => 'Required for PostgreSQL database backups.',
+            'pg_dump' => 'Required for PostgreSQL database backups.',
         ];
 
         $missing = [];

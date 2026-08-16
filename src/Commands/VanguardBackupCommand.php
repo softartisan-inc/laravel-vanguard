@@ -136,7 +136,11 @@ class VanguardBackupCommand extends Command
      */
     protected function dispatchToQueue(string $target, array $options, string $label): bool
     {
-        if (! config('vanguard.queue.enabled', true)) {
+        // Only the explicit flag dispatches. Following queue.enabled here
+        // would turn a hand-typed backup into a job that does nothing at all
+        // when no worker is running — the silent no-op this package exists to
+        // avoid. Scheduled tenant runs still queue through backupAllTenants().
+        if (! $this->option('queue')) {
             return false;
         }
 

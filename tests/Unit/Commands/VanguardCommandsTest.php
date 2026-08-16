@@ -194,8 +194,10 @@ class VanguardCommandsTest extends TestCase
     #[Test]
     public function backup_command_still_runs_inline_without_the_flag(): void
     {
+        // Even with the queue enabled: a hand-typed backup that silently
+        // becomes a job nobody works off is the failure mode to avoid.
         Queue::fake();
-        config(['vanguard.queue.enabled' => false]);
+        config(['vanguard.queue.enabled' => true]);
 
         $manager = Mockery::mock(BackupManager::class);
         $manager->shouldReceive('backupLandlord')->once()->andReturn($this->makeRecord());
