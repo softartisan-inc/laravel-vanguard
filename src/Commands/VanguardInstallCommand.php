@@ -30,6 +30,7 @@ class VanguardInstallCommand extends Command
         $this->call('migrate', ['--force' => $this->option('no-interaction')]);
 
         $this->checkDestinationDisks();
+        $this->checkPublishedConfigIsCurrent();
 
         $this->newLine();
         $this->info('✅ Vanguard installed successfully!');
@@ -37,6 +38,73 @@ class VanguardInstallCommand extends Command
         $this->printNextSteps();
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Warn about settings this version knows and the published config does not.
+     *
+     * vendor:publish never overwrites an existing config file, so upgrading the
+     * package leaves a config from an older version in place. Every read has a
+     * default, but a default of "empty" silently disables the feature — a
+     * missing notifications.mail.to means no alert will ever be sent.
+     */
+    protected function checkPublishedConfigIsCurrent(): void
+    {
+        $publishedPath = config_path('vanguard.php');
+
+        if (! file_exists($publishedPath)) {
+            return;
+        }
+
+        $shipped = require __DIR__.'/../../config/vanguard.php';
+        $published = require $publishedPath;
+
+        $missing = array_diff_key(
+            $this->flattenKeys($shipped),
+            $this->flattenKeys($published),
+        );
+
+        if ($missing === []) {
+            $this->line('   <info>Published config is up to date.</info>');
+
+            return;
+        }
+
+        $this->newLine();
+        $this->warn('   Your published config/vanguard.php predates this version and is missing:');
+
+        foreach (array_keys($missing) as $key) {
+            $this->line("     - {$key}");
+        }
+
+        $this->line('   <comment>Each falls back to a built-in default, but a setting you cannot see</comment>');
+        $this->line('   <comment>is a setting you cannot rely on. Compare against</comment>');
+        $this->line('   <comment>vendor/softartisan/laravel-vanguard/config/vanguard.php, or republish with</comment>');
+        $this->line('   <comment>php artisan vendor:publish --tag=vanguard-config --force</comment> (overwrites yours).');
+    }
+
+    /**
+     * Flatten a config array to dotted keys, treating lists as leaves.
+     *
+     * @return array<string, true>
+     */
+    protected function flattenKeys(array $config, string $prefix = ''): array
+    {
+        $keys = [];
+
+        foreach ($config as $key => $value) {
+            $dotted = $prefix === '' ? (string) $key : "{$prefix}.{$key}";
+
+            if (is_array($value) && $value !== [] && array_keys($value) !== range(0, count($value) - 1)) {
+                $keys += $this->flattenKeys($value, $dotted);
+
+                continue;
+            }
+
+            $keys[$dotted] = true;
+        }
+
+        return $keys;
     }
 
     /**
