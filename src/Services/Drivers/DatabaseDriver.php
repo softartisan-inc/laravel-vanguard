@@ -109,37 +109,48 @@ class DatabaseDriver
      * fly, its stderr is kept aside and only ever surfaces in the exception —
      * never inside the archive.
      *
-     * Uses MYSQL_PWD environment variable to pass the password securely.
+     * The password travels in a 0600 defaults file, removed in the finally
+     * block whatever the dump did — see writeMysqlDefaultsFile().
      */
     protected function dumpMysqlViaCli(array $c, string $dest, string $binary): void
     {
-        $this->setMysqlPasswordEnv($c);
+        $defaultsFile = $this->writeMysqlDefaultsFile($c);
 
         try {
-            $this->runProcessToGzip($this->mysqlDumpCommand($binary, $c), $dest, 'mysqldump');
+            $this->runProcessToGzip($this->mysqlDumpCommand($binary, $c, $defaultsFile), $dest, 'mysqldump');
         } finally {
-            $this->clearMysqlPasswordEnv();
+            $this->removeMysqlDefaultsFile($defaultsFile);
         }
     }
 
     /**
      * Build the mysqldump command as an argument list (no shell involved).
      *
-     * The password is intentionally absent: it is passed via MYSQL_PWD so it
-     * never shows up in the system process list.
+     * The password is intentionally absent from the arguments: --password= is
+     * readable by every user of the machine through ps. It is handed over in a
+     * defaults file instead, and that option has to come first — mysqldump
+     * refuses it anywhere else ("unknown variable 'defaults-extra-file=…'") and
+     * then dies on the next option it would otherwise have understood.
      *
      * @param  string  $binary  Resolved mysqldump path or bare name
      * @param  array  $c  Laravel MySQL connection config
+     * @param  string|null  $defaultsFile  Path to the temporary credential file, if any
      * @return array<int, string>
      */
-    protected function mysqlDumpCommand(string $binary, array $c): array
+    protected function mysqlDumpCommand(string $binary, array $c, ?string $defaultsFile = null): array
     {
-        $command = [
-            $binary,
+        $command = [$binary];
+
+        if ($defaultsFile !== null) {
+            $command[] = '--defaults-extra-file='.$defaultsFile;
+        }
+
+        array_push(
+            $command,
             '-h', (string) ($c['host'] ?? '127.0.0.1'),
             '-P', (string) ($c['port'] ?? 3306),
             '-u', (string) ($c['username'] ?? 'root'),
-        ];
+        );
 
         if (! empty($c['unix_socket'])) {
             $command[] = '--socket='.$c['unix_socket'];
@@ -411,42 +422,49 @@ class DatabaseDriver
     /**
      * Restore a MySQL/MariaDB database from a gzipped SQL dump.
      *
-     * Uses MYSQL_PWD environment variable to pass the password securely.
+     * The password travels in a 0600 defaults file, removed in the finally
+     * block whatever the restore did — see writeMysqlDefaultsFile().
      *
      * @param  array  $c  Laravel MySQL connection config
      * @param  string  $src  Absolute path to the .sql.gz dump file
      */
     protected function restoreMysql(array $c, string $src): void
     {
-        $this->setMysqlPasswordEnv($c);
+        $defaultsFile = $this->writeMysqlDefaultsFile($c);
 
         try {
             $cmd = sprintf(
                 'gunzip -c %s | %s %s %s 2>&1',
                 escapeshellarg($src),
                 escapeshellcmd($this->resolveBinary('mysql')),
-                $this->mysqlConnectionArgs($c),
+                $this->mysqlConnectionArgs($c, $defaultsFile),
                 escapeshellarg($c['database']),
             );
 
             $this->exec($cmd, 'mysql restore');
         } finally {
-            $this->clearMysqlPasswordEnv();
+            $this->removeMysqlDefaultsFile($defaultsFile);
         }
     }
 
     /**
      * Build the common MySQL connection arguments string (host, port, user, socket, flags).
      *
-     * The password is intentionally omitted here and passed via the MYSQL_PWD
-     * environment variable to avoid exposing it in the process list.
+     * The password is intentionally omitted here: it reaches the client through
+     * the defaults file, whose option leads the list because the client rejects
+     * --defaults-extra-file in any other position.
      *
      * @param  array  $c  Laravel MySQL connection config
+     * @param  string|null  $defaultsFile  Path to the temporary credential file, if any
      * @return string Shell-safe argument string
      */
-    protected function mysqlConnectionArgs(array $c): string
+    protected function mysqlConnectionArgs(array $c, ?string $defaultsFile = null): string
     {
-        $args = sprintf(
+        $args = $defaultsFile !== null
+            ? '--defaults-extra-file='.escapeshellarg($defaultsFile).' '
+            : '';
+
+        $args .= sprintf(
             '-h %s -P %s -u %s',
             escapeshellarg($c['host'] ?? '127.0.0.1'),
             escapeshellarg((string) ($c['port'] ?? 3306)),
@@ -465,30 +483,95 @@ class DatabaseDriver
     }
 
     /**
-     * Set the MYSQL_PWD environment variable for the current process.
+     * Write the password into a temporary defaults file the client will read.
      *
-     * This avoids passing the password on the command line where it would be
-     * visible in the system process list. Always call clearMysqlPasswordEnv()
-     * in a finally block after the command completes.
+     * The credential used to travel in MYSQL_PWD. The environment of a running
+     * process is world-readable to anything running as the same user — a second
+     * PHP-FPM pool, a stray shell, any compromised dependency — through
+     * /proc/<pid>/environ, for as long as the dump lasts; and a fatal signal,
+     * which skips every finally block, left it set for every child started
+     * afterwards. A file can be made unreadable to everyone else, which an
+     * environment variable cannot.
+     *
+     * The mode is set before the secret is written, not after: tempnam() already
+     * creates the file 0600 on the platforms we support, but a window in which
+     * the credential sits in a readable file is exactly the defect being
+     * removed, so it is closed explicitly rather than assumed shut.
+     *
+     * Returns null when the connection has no password, so no file is created
+     * and no --defaults-extra-file option is passed at all.
      *
      * @param  array  $c  Laravel MySQL connection config
+     * @return string|null Absolute path to the file, or null when there is no password
+     *
+     * @throws RuntimeException When the file cannot be created or written
      */
-    protected function setMysqlPasswordEnv(array $c): void
+    protected function writeMysqlDefaultsFile(array $c): ?string
     {
-        if (! empty($c['password'])) {
-            putenv("MYSQL_PWD={$c['password']}");
+        if (empty($c['password'])) {
+            return null;
         }
+
+        $path = tempnam(sys_get_temp_dir(), 'vanguard-mysql-');
+
+        if ($path === false) {
+            throw new RuntimeException('[Vanguard:mysql] Unable to create the temporary credentials file.');
+        }
+
+        if (! chmod($path, 0600)) {
+            @unlink($path);
+
+            throw new RuntimeException('[Vanguard:mysql] Unable to restrict the temporary credentials file.');
+        }
+
+        $contents = "[client]\npassword=".$this->quoteMysqlOptionValue((string) $c['password'])."\n";
+
+        if (file_put_contents($path, $contents) === false) {
+            @unlink($path);
+
+            throw new RuntimeException('[Vanguard:mysql] Unable to write the temporary credentials file.');
+        }
+
+        return $path;
     }
 
     /**
-     * Remove MYSQL_PWD from the process environment.
+     * Quote a value for the ini-style option file mysql/mysqldump parse.
      *
-     * Called in a finally block after dumpMysql/restoreMysql so that the
-     * credential does not persist in the process env across subsequent jobs.
+     * Unquoted, that syntax eats passwords: a # starts a comment, and leading
+     * and trailing spaces are stripped. Both produce the same failure — the
+     * client authenticates with a truncated password and the backup dies with
+     * "Access denied", which reads exactly like a wrong password and has cost
+     * whole nights of backups elsewhere.
+     *
+     * So the value is always wrapped in double quotes, which makes #, spaces
+     * and single quotes ordinary data. Inside those quotes the parser
+     * recognises backslash escapes, so the backslash itself and the closing
+     * quote character — the only two that could end or alter the value — are
+     * escaped. Everything else is passed through byte for byte.
+     *
+     * @param  string  $value  The raw password
+     * @return string The quoted, escaped value, quotes included
      */
-    protected function clearMysqlPasswordEnv(): void
+    protected function quoteMysqlOptionValue(string $value): string
     {
-        putenv('MYSQL_PWD');
+        return '"'.str_replace(['\\', '"'], ['\\\\', '\\"'], $value).'"';
+    }
+
+    /**
+     * Delete the temporary defaults file.
+     *
+     * Always called from a finally block: a dump that throws must not leave the
+     * credential on disk, and the tmp directory is the last place it should be
+     * found by whoever goes looking after an incident.
+     *
+     * @param  string|null  $path  The file to remove, or null when none was written
+     */
+    protected function removeMysqlDefaultsFile(?string $path): void
+    {
+        if ($path !== null && file_exists($path)) {
+            @unlink($path);
+        }
     }
 
     // ─── PostgreSQL ───────────────────────────────────────────────
