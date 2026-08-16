@@ -29,7 +29,7 @@ class VanguardSchedulerTest extends TestCase
         $schedule = Mockery::mock(Schedule::class);
         $schedule->shouldNotReceive('command');
 
-        $tenancy   = Mockery::mock(TenancyResolver::class);
+        $tenancy = Mockery::mock(TenancyResolver::class);
         $scheduler = new VanguardScheduler($tenancy);
 
         $scheduler->schedule($schedule);
@@ -46,12 +46,12 @@ class VanguardSchedulerTest extends TestCase
     public function scheduler_registers_landlord_command_when_enabled(): void
     {
         config([
-            'vanguard.schedule.enabled'   => true,
-            'vanguard.schedule.landlord'  => true,
-            'vanguard.schedule.tenants'   => false,
+            'vanguard.schedule.enabled' => true,
+            'vanguard.schedule.landlord' => true,
+            'vanguard.schedule.tenants' => false,
             'vanguard.schedule.frequency' => 'daily',
-            'vanguard.schedule.cron'      => '0 2 * * *',
-            'vanguard.retention.enabled'  => false,
+            'vanguard.schedule.cron' => '0 2 * * *',
+            'vanguard.retention.enabled' => false,
         ]);
 
         $tenancy = Mockery::mock(TenancyResolver::class);
@@ -62,6 +62,7 @@ class VanguardSchedulerTest extends TestCase
         $pendingMock->shouldReceive('timezone')->once()->andReturnSelf();
         $pendingMock->shouldReceive('withoutOverlapping')->once()->andReturnSelf();
         $pendingMock->shouldReceive('runInBackground')->once()->andReturnSelf();
+        $pendingMock->shouldReceive('before')->once()->andReturnSelf();
         $pendingMock->shouldReceive('onFailure')->once()->andReturnSelf();
 
         $cleanupPendingMock = Mockery::mock();
@@ -69,6 +70,7 @@ class VanguardSchedulerTest extends TestCase
         $cleanupPendingMock->shouldReceive('timezone')->once()->andReturnSelf();
         $cleanupPendingMock->shouldReceive('withoutOverlapping')->once()->andReturnSelf();
         $cleanupPendingMock->shouldReceive('runInBackground')->once()->andReturnSelf();
+        $cleanupPendingMock->shouldReceive('before')->once()->andReturnSelf();
 
         $schedule = Mockery::mock(Schedule::class);
         $schedule->shouldReceive('command')
@@ -89,16 +91,28 @@ class VanguardSchedulerTest extends TestCase
     public function scheduler_registers_per_tenant_commands(): void
     {
         config([
-            'vanguard.schedule.enabled'   => true,
-            'vanguard.schedule.landlord'  => false,
-            'vanguard.schedule.tenants'   => true,
+            'vanguard.schedule.enabled' => true,
+            'vanguard.schedule.landlord' => false,
+            'vanguard.schedule.tenants' => true,
             'vanguard.schedule.frequency' => 'daily',
-            'vanguard.schedule.cron'      => '0 2 * * *',
-            'vanguard.retention.enabled'  => false,
+            'vanguard.schedule.cron' => '0 2 * * *',
+            'vanguard.retention.enabled' => false,
         ]);
 
-        $t1 = new class { public function getTenantKey() { return 'acme'; } };
-        $t2 = new class { public function getTenantKey() { return 'globex'; } };
+        $t1 = new class
+        {
+            public function getTenantKey()
+            {
+                return 'acme';
+            }
+        };
+        $t2 = new class
+        {
+            public function getTenantKey()
+            {
+                return 'globex';
+            }
+        };
 
         $tenancy = Mockery::mock(TenancyResolver::class);
         $tenancy->shouldReceive('isEnabled')->once()->andReturn(true);
@@ -110,6 +124,7 @@ class VanguardSchedulerTest extends TestCase
         $pendingMock->shouldReceive('timezone')->twice()->andReturnSelf();
         $pendingMock->shouldReceive('withoutOverlapping')->twice()->andReturnSelf();
         $pendingMock->shouldReceive('runInBackground')->twice()->andReturnSelf();
+        $pendingMock->shouldReceive('before')->twice()->andReturnSelf();
         $pendingMock->shouldReceive('onFailure')->twice()->andReturnSelf();
 
         $cleanupPendingMock = Mockery::mock();
@@ -117,6 +132,7 @@ class VanguardSchedulerTest extends TestCase
         $cleanupPendingMock->shouldReceive('timezone')->once()->andReturnSelf();
         $cleanupPendingMock->shouldReceive('withoutOverlapping')->once()->andReturnSelf();
         $cleanupPendingMock->shouldReceive('runInBackground')->once()->andReturnSelf();
+        $cleanupPendingMock->shouldReceive('before')->once()->andReturnSelf();
 
         $schedule = Mockery::mock(Schedule::class);
         $schedule->shouldReceive('command')
@@ -141,15 +157,21 @@ class VanguardSchedulerTest extends TestCase
     public function scheduler_uses_tenant_custom_cron_when_set(): void
     {
         config([
-            'vanguard.schedule.enabled'   => true,
-            'vanguard.schedule.landlord'  => false,
-            'vanguard.schedule.tenants'   => true,
+            'vanguard.schedule.enabled' => true,
+            'vanguard.schedule.landlord' => false,
+            'vanguard.schedule.tenants' => true,
             'vanguard.schedule.frequency' => 'daily',
-            'vanguard.schedule.cron'      => '0 2 * * *',
-            'vanguard.retention.enabled'  => false,
+            'vanguard.schedule.cron' => '0 2 * * *',
+            'vanguard.retention.enabled' => false,
         ]);
 
-        $tenant = new class { public function getTenantKey() { return 'vip'; } };
+        $tenant = new class
+        {
+            public function getTenantKey()
+            {
+                return 'vip';
+            }
+        };
 
         $tenancy = Mockery::mock(TenancyResolver::class);
         $tenancy->shouldReceive('isEnabled')->andReturn(true);
@@ -164,6 +186,7 @@ class VanguardSchedulerTest extends TestCase
         $pendingMock->shouldReceive('timezone')->andReturnSelf();
         $pendingMock->shouldReceive('withoutOverlapping')->andReturnSelf();
         $pendingMock->shouldReceive('runInBackground')->andReturnSelf();
+        $pendingMock->shouldReceive('before')->andReturnSelf();
         $pendingMock->shouldReceive('onFailure')->andReturnSelf();
 
         $cleanupPendingMock = Mockery::mock();
@@ -171,6 +194,7 @@ class VanguardSchedulerTest extends TestCase
         $cleanupPendingMock->shouldReceive('timezone')->andReturnSelf();
         $cleanupPendingMock->shouldReceive('withoutOverlapping')->andReturnSelf();
         $cleanupPendingMock->shouldReceive('runInBackground')->andReturnSelf();
+        $cleanupPendingMock->shouldReceive('before')->andReturnSelf();
 
         $schedule = Mockery::mock(Schedule::class);
         $schedule->shouldReceive('command')
@@ -193,7 +217,7 @@ class VanguardSchedulerTest extends TestCase
     public function cron_expression_matches_frequency_setting(): void
     {
         $scheduler = new VanguardScheduler(Mockery::mock(TenancyResolver::class));
-        $method    = new \ReflectionMethod(VanguardScheduler::class, 'globalCron');
+        $method = new \ReflectionMethod(VanguardScheduler::class, 'globalCron');
         $method->setAccessible(true);
 
         config(['vanguard.schedule.frequency' => 'hourly']);
@@ -213,9 +237,9 @@ class VanguardSchedulerTest extends TestCase
     public function retention_prune_is_registered_when_enabled(): void
     {
         config([
-            'vanguard.schedule.enabled'  => true,
+            'vanguard.schedule.enabled' => true,
             'vanguard.schedule.landlord' => false,
-            'vanguard.schedule.tenants'  => false,
+            'vanguard.schedule.tenants' => false,
             'vanguard.retention.enabled' => true,
         ]);
 
@@ -226,12 +250,14 @@ class VanguardSchedulerTest extends TestCase
         $pendingMock->shouldReceive('timezone')->once()->andReturnSelf();
         $pendingMock->shouldReceive('withoutOverlapping')->once()->andReturnSelf();
         $pendingMock->shouldReceive('runInBackground')->once()->andReturnSelf();
+        $pendingMock->shouldReceive('before')->once()->andReturnSelf();
 
         $cleanupPendingMock = Mockery::mock();
         $cleanupPendingMock->shouldReceive('hourly')->once()->andReturnSelf();
         $cleanupPendingMock->shouldReceive('timezone')->once()->andReturnSelf();
         $cleanupPendingMock->shouldReceive('withoutOverlapping')->once()->andReturnSelf();
         $cleanupPendingMock->shouldReceive('runInBackground')->once()->andReturnSelf();
+        $cleanupPendingMock->shouldReceive('before')->once()->andReturnSelf();
 
         $schedule = Mockery::mock(Schedule::class);
         $schedule->shouldReceive('command')

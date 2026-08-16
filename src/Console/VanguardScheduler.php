@@ -2,12 +2,25 @@
 
 namespace SoftArtisan\Vanguard\Console;
 
+use Cron\CronExpression;
 use Illuminate\Console\Scheduling\Schedule;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use SoftArtisan\Vanguard\Services\TenancyResolver;
 
 class VanguardScheduler
 {
+    /**
+     * Where the scheduler proves it is alive.
+     *
+     * Nothing in the installation could distinguish a live cron from a dead
+     * one. In March 2026 this product showed a flawless configuration and
+     * backed up nothing for five months. A configuration is a claim; this
+     * stamp is the only evidence.
+     */
+    public const HEARTBEAT_KEY = 'vanguard:scheduler:seen';
+
     public function __construct(protected TenancyResolver $tenancy) {}
 
     /**
@@ -26,7 +39,7 @@ class VanguardScheduler
 
         // ─── Landlord backup ──────────────────────────────────────
         if (config('vanguard.schedule.landlord', true)) {
-            $this->scheduleCommand($schedule, 'vanguard:backup --landlord', $this->globalCron(), $tz);
+            $this->scheduleCommand($schedule, 'vanguard:backup --landlord', static::globalCron(), $tz);
         }
 
         // ─── Tenant backups ───────────────────────────────────────
@@ -44,7 +57,7 @@ class VanguardScheduler
                     continue;
                 }
 
-                $cron = $this->tenancy->tenantSchedule($tenant) ?? $this->globalCron();
+                $cron = $this->tenancy->tenantSchedule($tenant) ?? static::globalCron();
 
                 $this->scheduleCommand(
                     $schedule,
@@ -61,16 +74,20 @@ class VanguardScheduler
                 ->daily()
                 ->timezone($tz)
                 ->withoutOverlapping()
-                ->runInBackground();
+                ->runInBackground()
+                ->before(fn () => static::heartbeat());
         }
 
         // ─── Orphaned tmp cleanup ──────────────────────────────────
         // Removes session tmp dirs left by crashed workers (older than 6 hours).
+        // Hourly, so this is the command that keeps the heartbeat fresh between
+        // two daily backups.
         $schedule->command('vanguard:cleanup-tmp')
             ->hourly()
             ->timezone($tz)
             ->withoutOverlapping()
-            ->runInBackground();
+            ->runInBackground()
+            ->before(fn () => static::heartbeat());
     }
 
     /**
@@ -90,6 +107,10 @@ class VanguardScheduler
             ->timezone($tz)
             ->withoutOverlapping()
             ->runInBackground()
+            // Stamped in the scheduler process itself, before the background
+            // task is spawned: it is the scheduler running that we are trying
+            // to prove, not the command succeeding.
+            ->before(fn () => static::heartbeat())
             ->onFailure(function () use ($command) {
                 Log::error("[Vanguard] Scheduled command failed: {$command}");
             });
@@ -119,7 +140,7 @@ class VanguardScheduler
      *
      * @return string A valid cron expression
      */
-    protected function globalCron(): string
+    public static function globalCron(): string
     {
         $frequency = config('vanguard.schedule.frequency', 'daily');
 
@@ -131,5 +152,66 @@ class VanguardScheduler
             'custom' => config('vanguard.schedule.cron', '0 2 * * *'),
             default => '0 2 * * *',
         };
+    }
+
+    /**
+     * Record that the scheduler ran.
+     *
+     * The TTL is two days: longer than any interval a Vanguard command uses,
+     * so a stamp that stops being refreshed expires instead of lingering
+     * forever and reporting a cron that died last month as alive.
+     */
+    public static function heartbeat(): void
+    {
+        Cache::put(static::HEARTBEAT_KEY, Carbon::now()->toIso8601String(), Carbon::now()->addDays(2));
+    }
+
+    /**
+     * When the scheduler was last seen, or null if it never has been.
+     */
+    public static function lastSeenAt(): ?Carbon
+    {
+        $seen = Cache::get(static::HEARTBEAT_KEY);
+
+        if (! is_string($seen) || $seen === '') {
+            return null;
+        }
+
+        try {
+            return Carbon::parse($seen);
+        } catch (\Throwable) {
+            // A corrupted cache entry means "unknown", not "crash the health
+            // screen" — the page that reports breakage is the last thing
+            // allowed to break.
+            return null;
+        }
+    }
+
+    /**
+     * How many seconds apart the global backup cron runs.
+     *
+     * The base for the freshness threshold on the health screen, which is
+     * twice this (spec §5).
+     *
+     * The gap is measured between the next two runs from now. For an
+     * irregular expression — '0 0,1 * * *', one hour then twenty-three — the
+     * answer depends on when it is asked; that is a deliberate simplification,
+     * since the alternative is to scan a whole period to report a threshold
+     * that only has to be roughly right.
+     */
+    public static function globalIntervalSeconds(): int
+    {
+        try {
+            $cron = new CronExpression(static::globalCron());
+
+            $next = Carbon::instance($cron->getNextRunDate(Carbon::now()));
+            $after = Carbon::instance($cron->getNextRunDate($next));
+
+            return max(60, (int) $next->diffInSeconds($after, true));
+        } catch (\Throwable) {
+            // An unparseable expression is a configuration bug the health
+            // screen should report, not one it should die of.
+            return 86400;
+        }
     }
 }
