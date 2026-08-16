@@ -121,6 +121,47 @@ class BackupStorageManagerStreamTest extends TestCase
     }
 
     #[Test]
+    public function a_refused_local_write_fails_the_backup_instead_of_recording_a_copy(): void
+    {
+        // The cross-filesystem case: tmp on tmpfs and storage on a mounted
+        // volume, which is the normal Docker layout. rename() answers EXDEV
+        // there, so the stream fallback runs — and it was the one branch whose
+        // false was dropped, leaving a record that named a local copy nothing
+        // had ever written. The next download or restore answers 404 on it.
+        config([
+            'vanguard.destinations.local.enabled' => true,
+            'vanguard.destinations.local.disk' => 'refusing',
+            'vanguard.destinations.remote.enabled' => false,
+            'vanguard.destinations.ftp.enabled' => false,
+            // Any driver but 'local', so persistToLocalDisk() skips the
+            // rename() fast path and streams the way EXDEV forces it to.
+            'filesystems.disks.refusing' => ['driver' => 'sftp'],
+        ]);
+
+        $disk = Mockery::mock();
+        $disk->shouldReceive('put')->once()->andReturn(false);
+        Storage::shouldReceive('disk')->with('refusing')->andReturn($disk);
+
+        $store = app(BackupStorageManager::class);
+        $thrown = null;
+
+        try {
+            $store->bundle([], 'refused-backup');
+        } catch (\Throwable $e) {
+            $thrown = $e;
+        } finally {
+            $store->cleanTmp();
+        }
+
+        $this->assertInstanceOf(
+            \RuntimeException::class,
+            $thrown,
+            'a destination that refused the write must fail the backup, not be recorded as reached',
+        );
+        $this->assertStringContainsString('refusing', $thrown->getMessage());
+    }
+
+    #[Test]
     public function a_download_leaves_no_handle_open_behind_it(): void
     {
         Storage::fake('local');

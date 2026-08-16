@@ -209,7 +209,10 @@ class BackupStorageManager
         if (config('vanguard.destinations.local.enabled', true)) {
             $localDisk = config('vanguard.destinations.local.disk', 'local');
             $localPath = config('vanguard.destinations.local.path', 'vanguard-backups')."/{$name}.tar";
-            $this->persistToLocalDisk($bundlePath, $localDisk, $localPath);
+            $ok = $this->persistToLocalDisk($bundlePath, $localDisk, $localPath);
+            if (! $ok) {
+                throw new RuntimeException("[Vanguard] Failed to write backup to local disk [{$localDisk}]: {$localPath}");
+            }
             $result['local_path'] = $localPath;
         }
 
@@ -225,11 +228,19 @@ class BackupStorageManager
      *
      * For any other driver (ftp, sftp, custom local adapters): always streams.
      *
+     * The answer travels back to the caller, which is the whole point: this
+     * used to return void and drop the stream fallback's false on the floor,
+     * so a disk that refused the write still produced a record naming a local
+     * copy that did not exist — and the next download or restore answered 404
+     * on it. The remote and FTP destinations have always raised on a refusal;
+     * the local one now does too.
+     *
      * @param  string  $sourcePath  Absolute path to the file to persist (may be consumed by rename)
      * @param  string  $disk  Filesystem disk name
      * @param  string  $storagePath  Destination path relative to the disk root
+     * @return bool Whether the file actually reached the disk
      */
-    protected function persistToLocalDisk(string $sourcePath, string $disk, string $storagePath): void
+    protected function persistToLocalDisk(string $sourcePath, string $disk, string $storagePath): bool
     {
         $diskConfig = config("filesystems.disks.{$disk}", []);
 
@@ -244,12 +255,12 @@ class BackupStorageManager
             // rename() is atomic and O(1) on the same filesystem.
             // It returns false (EXDEV) when crossing filesystem boundaries.
             if (@rename($sourcePath, $destPath)) {
-                return;
+                return true;
             }
         }
 
         // Fallback: stream copy — no full file in memory.
-        $this->putStream($disk, $storagePath, $sourcePath);
+        return $this->putStream($disk, $storagePath, $sourcePath);
     }
 
     /**
