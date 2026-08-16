@@ -31,3 +31,5 @@ phpstan.neon
 testbench.yaml
 /docs
 /coverage
+# Agent scratch: SDD workspaces, reports. Never part of the package.
+/.superpowers
