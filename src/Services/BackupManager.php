@@ -7,23 +7,18 @@ use RuntimeException;
 use SoftArtisan\Vanguard\Events\BackupCompleted;
 use SoftArtisan\Vanguard\Events\BackupFailed;
 use SoftArtisan\Vanguard\Events\BackupStarted;
+use SoftArtisan\Vanguard\Jobs\RunTenantBackupJob;
 use SoftArtisan\Vanguard\Models\BackupRecord;
 use SoftArtisan\Vanguard\Services\Drivers\DatabaseDriver;
 use SoftArtisan\Vanguard\Services\Drivers\StorageDriver;
 
 class BackupManager
 {
-    /**
-     * @param  DatabaseDriver       $db
-     * @param  StorageDriver        $storage
-     * @param  BackupStorageManager $store
-     * @param  TenancyResolver      $tenancy
-     */
     public function __construct(
-        protected DatabaseDriver      $db,
-        protected StorageDriver       $storage,
+        protected DatabaseDriver $db,
+        protected StorageDriver $storage,
         protected BackupStorageManager $store,
-        protected TenancyResolver     $tenancy,
+        protected TenancyResolver $tenancy,
     ) {}
 
     // ─────────────────────────────────────────────────────────────
@@ -39,9 +34,9 @@ class BackupManager
      *
      * @param  array  $options  Supported keys:
      *                          - 'include_filesystem' (bool) — default true
-     * @return BackupRecord  A freshly reloaded record with final status
+     * @return BackupRecord A freshly reloaded record with final status
      *
-     * @throws \Throwable  Re-throws any exception after recording the failure
+     * @throws \Throwable Re-throws any exception after recording the failure
      */
     public function backupLandlord(array $options = []): BackupRecord
     {
@@ -53,7 +48,7 @@ class BackupManager
             event(new BackupStarted($record));
 
             $files = [];
-            $name  = "landlord_{$record->id}_".now()->format('Ymd_His');
+            $name = "landlord_{$record->id}_".now()->format('Ymd_His');
 
             // Central database
             if (config('vanguard.sources.landlord_database', true)) {
@@ -96,26 +91,26 @@ class BackupManager
      * Initialises the tenancy context via TenancyResolver::runForTenant() to
      * ensure the correct database connection is active during the dump.
      *
-     * @param  mixed  $tenant   A tenant model instance (must implement getTenantKey())
+     * @param  mixed  $tenant  A tenant model instance (must implement getTenantKey())
      * @param  array  $options  Supported keys:
      *                          - 'include_filesystem' (bool) — default false for tenant backups
-     * @return BackupRecord  A freshly reloaded record with final status
+     * @return BackupRecord A freshly reloaded record with final status
      *
-     * @throws \Throwable  Re-throws any exception after recording the failure
+     * @throws \Throwable Re-throws any exception after recording the failure
      */
     public function backupTenant(mixed $tenant, array $options = []): BackupRecord
     {
         $this->assertSufficientDiskSpace();
 
         $tenantId = $tenant->getTenantKey();
-        $record   = $this->createRecord($tenantId, 'tenant', $options);
+        $record = $this->createRecord($tenantId, 'tenant', $options);
 
         try {
             event(new BackupStarted($record));
 
             $this->tenancy->runForTenant($tenant, function () use ($tenant, $record, $options, &$files, &$name) {
                 $files = [];
-                $name  = "tenant_{$tenant->getTenantKey()}_{$record->id}_".now()->format('Ymd_His');
+                $name = "tenant_{$tenant->getTenantKey()}_{$record->id}_".now()->format('Ymd_His');
 
                 // Tenant database
                 if (config('vanguard.sources.tenant_databases', true)) {
@@ -159,9 +154,9 @@ class BackupManager
      * Useful for backing up uploaded files independently of the database schedule.
      *
      * @param  array  $options  Reserved for future use
-     * @return BackupRecord  A freshly reloaded record with final status
+     * @return BackupRecord A freshly reloaded record with final status
      *
-     * @throws \Throwable  Re-throws any exception after recording the failure
+     * @throws \Throwable Re-throws any exception after recording the failure
      */
     public function backupFilesystem(array $options = []): BackupRecord
     {
@@ -204,9 +199,9 @@ class BackupManager
      * without halting the remaining tenants.
      *
      * @param  array  $options  Forwarded to backupTenant() or RunTenantBackupJob
-     * @return array  One entry per tenant: ['tenant' => id, 'queued' => true]
-     *                or ['tenant' => id, 'record' => BackupRecord]
-     *                or ['tenant' => id, 'error' => string]
+     * @return array One entry per tenant: ['tenant' => id, 'queued' => true]
+     *               or ['tenant' => id, 'record' => BackupRecord]
+     *               or ['tenant' => id, 'error' => string]
      */
     public function backupAllTenants(array $options = []): array
     {
@@ -215,18 +210,18 @@ class BackupManager
         foreach ($this->tenancy->allTenants() as $tenant) {
             try {
                 if (config('vanguard.queue.enabled', true)) {
-                    \SoftArtisan\Vanguard\Jobs\RunTenantBackupJob::dispatch($tenant->getTenantKey(), $options)
+                    RunTenantBackupJob::dispatch($tenant->getTenantKey(), $options)
                         ->onQueue(config('vanguard.queue.queue', 'vanguard'))
                         ->onConnection(config('vanguard.queue.connection'));
                     $results[] = ['tenant' => $tenant->getTenantKey(), 'queued' => true];
                 } else {
-                    $record    = $this->backupTenant($tenant, $options);
+                    $record = $this->backupTenant($tenant, $options);
                     $results[] = ['tenant' => $tenant->getTenantKey(), 'record' => $record];
                 }
             } catch (\Throwable $e) {
                 Log::error('[Vanguard] Tenant backup failed, skipping', [
                     'tenant' => $tenant->getTenantKey(),
-                    'error'  => $e->getMessage(),
+                    'error' => $e->getMessage(),
                 ]);
                 $results[] = ['tenant' => $tenant->getTenantKey(), 'error' => $e->getMessage()];
             }
@@ -260,6 +255,7 @@ class BackupManager
 
         if ($freeBytes === false) {
             Log::warning('[Vanguard] Could not determine free disk space', ['path' => $checkPath]);
+
             return;
         }
 
@@ -279,26 +275,25 @@ class BackupManager
      * Create and persist a new BackupRecord in 'running' status.
      *
      * @param  string|null  $tenantId  Null for landlord/filesystem backups
-     * @param  string       $type      'landlord'|'tenant'|'filesystem'
-     * @param  array        $meta      Arbitrary options stored on the record
-     * @return BackupRecord
+     * @param  string  $type  'landlord'|'tenant'|'filesystem'
+     * @param  array  $meta  Arbitrary options stored on the record
      */
     protected function createRecord(?string $tenantId, string $type, array $meta = []): BackupRecord
     {
         return BackupRecord::create([
-            'tenant_id'   => $tenantId,
-            'type'        => $type,
-            'status'      => 'running',
-            'started_at'  => now(),
-            'sources'     => array_keys(array_filter([
+            'tenant_id' => $tenantId,
+            'type' => $type,
+            'status' => 'running',
+            'started_at' => now(),
+            'sources' => array_keys(array_filter([
                 'landlord_database' => config('vanguard.sources.landlord_database'),
-                'tenant_databases'  => config('vanguard.sources.tenant_databases'),
-                'filesystem'        => config('vanguard.sources.filesystem'),
+                'tenant_databases' => config('vanguard.sources.tenant_databases'),
+                'filesystem' => config('vanguard.sources.filesystem'),
             ])),
             'destinations' => array_keys(array_filter([
-                'local'  => config('vanguard.destinations.local.enabled'),
+                'local' => config('vanguard.destinations.local.enabled'),
                 'remote' => config('vanguard.destinations.remote.enabled'),
-                'ftp'    => config('vanguard.destinations.ftp.enabled'),
+                'ftp' => config('vanguard.destinations.ftp.enabled'),
             ])),
             'meta' => $meta,
         ]);
@@ -307,38 +302,66 @@ class BackupManager
     /**
      * Update a BackupRecord to 'completed' status with bundle metadata.
      *
-     * @param  BackupRecord  $record
-     * @param  array         $bundle  Output of BackupStorageManager::bundle()
+     * @param  array  $bundle  Output of BackupStorageManager::bundle()
      */
     protected function completeRecord(BackupRecord $record, array $bundle): void
     {
-        $record->update([
-            'status'       => 'completed',
-            'file_path'    => $bundle['local_path'],
-            'remote_path'  => $bundle['remote_path'],
-            'ftp_path'     => $bundle['ftp_path'],
-            'file_size'    => $bundle['size'],
-            'checksum'     => $bundle['checksum'],
+        $this->finishRecord($record, [
+            'status' => 'completed',
+            'file_path' => $bundle['local_path'],
+            'remote_path' => $bundle['remote_path'],
+            'ftp_path' => $bundle['ftp_path'],
+            'file_size' => $bundle['size'],
+            'checksum' => $bundle['checksum'],
             'completed_at' => now(),
         ]);
     }
 
     /**
      * Update a BackupRecord to 'failed' status and log the error.
-     *
-     * @param  BackupRecord  $record
-     * @param  \Throwable    $e
      */
     protected function failRecord(BackupRecord $record, \Throwable $e): void
     {
-        $record->update([
-            'status'       => 'failed',
-            'error'        => $e->getMessage(),
+        $recorded = $this->finishRecord($record, [
+            'status' => 'failed',
+            'error' => $e->getMessage(),
             'completed_at' => now(),
         ]);
+
         Log::error('[Vanguard] Backup failed', [
             'record_id' => $record->id,
-            'error'     => $e->getMessage(),
+            'error' => $e->getMessage(),
+            // False when the row had already reached a final status: the
+            // failure is real for this attempt, but it is not the record's
+            // outcome and must not be written over it.
+            'recorded' => $recorded,
         ]);
+    }
+
+    /**
+     * Write a final status onto a record, but only while it is still running.
+     *
+     * The status is read from the row inside the same statement, not from the
+     * copy in hand: a worker that has been holding this model since before a
+     * retry finished still believes it is running. Without the condition, the
+     * slower of two attempts has the last word and a completed backup is
+     * reported as failed — which, with --queue dispatching for real, is a
+     * live race rather than a theoretical one.
+     *
+     * @param  array<string, mixed>  $attributes  The final status and its metadata
+     * @return bool Whether the row was actually written
+     */
+    protected function finishRecord(BackupRecord $record, array $attributes): bool
+    {
+        $written = $record->newQuery()
+            ->whereKey($record->getKey())
+            ->where('status', 'running')
+            ->update($attributes) > 0;
+
+        if ($written) {
+            $record->refresh();
+        }
+
+        return $written;
     }
 }
