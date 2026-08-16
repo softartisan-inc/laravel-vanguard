@@ -7,6 +7,7 @@ use Mockery\MockInterface;
 use PHPUnit\Framework\Attributes\Test;
 use RuntimeException;
 use SoftArtisan\Vanguard\Models\BackupRecord;
+use SoftArtisan\Vanguard\Models\RestoreRecord;
 use SoftArtisan\Vanguard\Services\BackupStorageManager;
 use SoftArtisan\Vanguard\Services\Drivers\DatabaseDriver;
 use SoftArtisan\Vanguard\Services\Drivers\StorageDriver;
@@ -161,6 +162,35 @@ class RestoreServiceTest extends TestCase
             BackupRecord::find($newer->id),
             'backups taken after the dump must survive the restore',
         );
+    }
+
+    #[Test]
+    public function it_keeps_the_restore_history_when_the_landlord_database_is_restored(): void
+    {
+        config(['database.default' => 'sqlite']);
+        config(['database.connections.sqlite' => ['driver' => 'sqlite', 'database' => ':memory:']]);
+
+        $record = $this->makeRecord(['type' => 'landlord', 'file_path' => 'backups/landlord.tar', 'checksum' => null]);
+        $restoreHistory = $this->makeRestore(['backup_id' => $record->id, 'status' => 'completed']);
+
+        $this->store->shouldReceive('download')->once()->andReturn('/tmp/landlord.tar');
+        $this->store->shouldReceive('unBundle')->once()->andReturn(['database' => '/tmp/landlord_db.sql.gz']);
+
+        // The landlord dump also carries the vanguard_restores table as it stood
+        // mid-run, before this very restore's history row existed at all.
+        $this->db->shouldReceive('restore')->once()->andReturnUsing(function () {
+            RestoreRecord::query()->delete();
+        });
+
+        $this->restoreService->restore($record, ['verify_checksum' => false]);
+
+        $preserved = RestoreRecord::find($restoreHistory->id);
+
+        $this->assertNotNull(
+            $preserved,
+            'a restore must not erase the record of its own operation',
+        );
+        $this->assertSame('completed', $preserved->status);
     }
 
     #[Test]

@@ -6,6 +6,7 @@ use App\Models\Tenant;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
 use SoftArtisan\Vanguard\Models\BackupRecord;
+use SoftArtisan\Vanguard\Models\RestoreRecord;
 use SoftArtisan\Vanguard\Services\Drivers\DatabaseDriver;
 use SoftArtisan\Vanguard\Services\Drivers\StorageDriver;
 
@@ -177,47 +178,60 @@ class RestoreService
     }
 
     /**
-     * Run a database restore, then put the backup catalogue back as it was.
+     * Run a database restore, then put Vanguard's own bookkeeping back as it was.
      *
-     * The landlord dump contains the vanguard_backups table itself, captured
+     * The landlord dump contains Vanguard's own tables themselves, captured
      * while the backup was still running. Restoring it therefore rewound the
-     * catalogue: the backup being restored came back as 'running' — which the
-     * guard clause then refuses to restore a second time — and every backup
-     * taken after the dump disappeared from the record, archives included.
+     * bookkeeping: the backup being restored came back as 'running' — which the
+     * guard clause then refuses to restore a second time — every backup taken
+     * after the dump disappeared from the record, archives included, and the
+     * restore's own history row (this very operation) vanished with it.
      *
-     * The rows are read before the restore and written back after it, so the
-     * catalogue keeps describing the archives that actually exist.
+     * Both vanguard_backups and vanguard_restores are affected the same way,
+     * since both live in the landlord database the dump just overwrote. So both
+     * are snapshotted here: read before the restore and written back after it,
+     * so the catalogue keeps describing the archives that actually exist and the
+     * history keeps describing the restores that actually ran.
      *
      * @param  callable  $restore  Performs the database restore
      */
     protected function preservingCatalogue(callable $restore): void
     {
-        $model = new BackupRecord;
-        $connection = $model->getConnection();
-        $table = $model->getTable();
+        $models = [new BackupRecord, new RestoreRecord];
 
-        $snapshot = $connection->table($table)->get()
-            ->map(fn ($row) => (array) $row)
-            ->all();
+        $snapshots = [];
+        foreach ($models as $model) {
+            $table = $model->getTable();
+
+            $snapshots[$table] = [
+                'connection' => $model->getConnection(),
+                'rows' => $model->getConnection()->table($table)->get()
+                    ->map(fn ($row) => (array) $row)
+                    ->all(),
+            ];
+        }
 
         $restore();
 
-        if ($snapshot === []) {
-            return;
-        }
-
-        try {
-            $connection->table($table)->delete();
-
-            foreach (array_chunk($snapshot, 200) as $chunk) {
-                $connection->table($table)->insert($chunk);
+        foreach ($snapshots as $table => $snapshot) {
+            if ($snapshot['rows'] === []) {
+                continue;
             }
-        } catch (\Throwable $e) {
-            // The data restore succeeded; only the bookkeeping did not. Say so
-            // rather than failing a restore that actually worked.
-            Log::error('[Vanguard] Could not put the backup catalogue back after the restore', [
-                'error' => $e->getMessage(),
-            ]);
+
+            try {
+                $connection = $snapshot['connection'];
+                $connection->table($table)->delete();
+
+                foreach (array_chunk($snapshot['rows'], 200) as $chunk) {
+                    $connection->table($table)->insert($chunk);
+                }
+            } catch (\Throwable $e) {
+                // The data restore succeeded; only the bookkeeping did not. Say so
+                // rather than failing a restore that actually worked.
+                Log::error("[Vanguard] Could not put the {$table} table back after the restore", [
+                    'error' => $e->getMessage(),
+                ]);
+            }
         }
     }
 
