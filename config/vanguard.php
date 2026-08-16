@@ -1,5 +1,7 @@
 <?php
 
+use App\Models\Tenant;
+
 return [
 
     /*
@@ -12,7 +14,7 @@ return [
     | You can also configure these programmatically in AppServiceProvider:
     |   Vanguard::path('admin/backups')->domain('tools.acme.com');
     */
-    'path'   => env('VANGUARD_PATH', 'vanguard'),
+    'path' => env('VANGUARD_PATH', 'vanguard'),
     'domain' => env('VANGUARD_DOMAIN', null),
 
     /*
@@ -35,8 +37,8 @@ return [
     | 'tenant_model' must implement Stancl\Tenancy\Contracts\Tenant
     */
     'tenancy' => [
-        'enabled'      => env('VANGUARD_TENANCY_ENABLED', true),
-        'tenant_model' => env('VANGUARD_TENANT_MODEL', \App\Models\Tenant::class),
+        'enabled' => env('VANGUARD_TENANCY_ENABLED', true),
+        'tenant_model' => env('VANGUARD_TENANT_MODEL', Tenant::class),
     ],
 
     /*
@@ -47,9 +49,9 @@ return [
     */
     'sources' => [
         'landlord_database' => true,   // Central (landlord) database
-        'tenant_databases'  => true,   // All tenant databases
-        'filesystem'        => true,   // Application filesystem (storage/)
-        'filesystem_paths'  => [       // Paths relative to storage_path()
+        'tenant_databases' => true,   // All tenant databases
+        'filesystem' => true,   // Application filesystem (storage/)
+        'filesystem_paths' => [       // Paths relative to storage_path()
             'app',
         ],
         'filesystem_exclude' => [      // Paths to exclude
@@ -76,19 +78,21 @@ return [
     */
     'destinations' => [
         'local' => [
-            'enabled' => true,
-            'disk'    => 'local',
-            'path'    => 'vanguard-backups',
+            // Env-driven so a deployment that keeps no backup on the server
+            // itself can say so without publishing this file.
+            'enabled' => env('VANGUARD_LOCAL_ENABLED', true),
+            'disk' => env('VANGUARD_LOCAL_DISK', 'local'),
+            'path' => env('VANGUARD_LOCAL_PATH', 'vanguard-backups'),
         ],
         'remote' => [
             'enabled' => env('VANGUARD_REMOTE_ENABLED', false),
-            'disk'    => env('VANGUARD_REMOTE_DISK', 's3'),
-            'path'    => env('VANGUARD_REMOTE_PATH', 'vanguard-backups'),
+            'disk' => env('VANGUARD_REMOTE_DISK', 's3'),
+            'path' => env('VANGUARD_REMOTE_PATH', 'vanguard-backups'),
         ],
         'ftp' => [
             'enabled' => env('VANGUARD_FTP_ENABLED', false),
-            'disk'    => env('VANGUARD_FTP_DISK', 'ftp'),
-            'path'    => env('VANGUARD_FTP_PATH', 'vanguard-backups'),
+            'disk' => env('VANGUARD_FTP_DISK', 'ftp'),
+            'path' => env('VANGUARD_FTP_PATH', 'vanguard-backups'),
         ],
     ],
 
@@ -103,12 +107,12 @@ return [
     | For 'custom', set a valid cron expression in 'cron'.
     */
     'schedule' => [
-        'enabled'   => env('VANGUARD_SCHEDULE_ENABLED', true),
+        'enabled' => env('VANGUARD_SCHEDULE_ENABLED', true),
         'frequency' => env('VANGUARD_SCHEDULE_FREQUENCY', 'daily'),
-        'cron'      => env('VANGUARD_SCHEDULE_CRON', '0 2 * * *'),  // 2:00 AM daily
-        'timezone'  => env('APP_TIMEZONE', 'UTC'),
-        'landlord'  => true,   // Schedule landlord backup
-        'tenants'   => true,   // Schedule all tenant backups
+        'cron' => env('VANGUARD_SCHEDULE_CRON', '0 2 * * *'),  // 2:00 AM daily
+        'timezone' => env('APP_TIMEZONE', 'UTC'),
+        'landlord' => true,   // Schedule landlord backup
+        'tenants' => true,   // Schedule all tenant backups
     ],
 
     /*
@@ -119,7 +123,7 @@ return [
     */
     'retention' => [
         'enabled' => true,
-        'days'    => env('VANGUARD_RETENTION_DAYS', 30),
+        'days' => env('VANGUARD_RETENTION_DAYS', 30),
     ],
 
     /*
@@ -132,12 +136,12 @@ return [
     'notifications' => [
         'on_success' => env('VANGUARD_NOTIFY_SUCCESS', false),
         'on_failure' => env('VANGUARD_NOTIFY_FAILURE', true),
-        'mail'       => [
+        'mail' => [
             'enabled' => true,
-            'to'      => env('VANGUARD_NOTIFY_MAIL', null),
+            'to' => env('VANGUARD_NOTIFY_MAIL', null),
         ],
         'slack' => [
-            'enabled'     => false,
+            'enabled' => false,
             'webhook_url' => env('VANGUARD_SLACK_WEBHOOK', null),
         ],
     ],
@@ -172,10 +176,10 @@ return [
     |   ],
     */
     'queue' => [
-        'enabled'    => env('VANGUARD_QUEUE_ENABLED', true),
+        'enabled' => env('VANGUARD_QUEUE_ENABLED', true),
         'connection' => env('VANGUARD_QUEUE_CONNECTION', null),
-        'queue'      => env('VANGUARD_QUEUE_NAME', 'vanguard'),
-        'timeout'    => env('VANGUARD_QUEUE_TIMEOUT', 3600),
+        'queue' => env('VANGUARD_QUEUE_NAME', 'vanguard'),
+        'timeout' => env('VANGUARD_QUEUE_TIMEOUT', 3600),
     ],
 
     /*
@@ -190,9 +194,9 @@ return [
     | 'api'     — all other API endpoints (stats, list, delete…)
     */
     'rate_limits' => [
-        'run'     => env('VANGUARD_RATE_LIMIT_RUN',     5),
+        'run' => env('VANGUARD_RATE_LIMIT_RUN', 5),
         'restore' => env('VANGUARD_RATE_LIMIT_RESTORE', 3),
-        'api'     => env('VANGUARD_RATE_LIMIT_API',     60),
+        'api' => env('VANGUARD_RATE_LIMIT_API', 60),
     ],
 
     /*
@@ -215,10 +219,10 @@ return [
     | max_lifetime: Max SSE connection lifetime before client auto-reconnects (seconds)
     */
     'realtime' => [
-        'driver'        => env('VANGUARD_REALTIME_DRIVER', 'polling'),
-        'interval'      => env('VANGUARD_POLL_INTERVAL', 5),
-        'sse_interval'  => env('VANGUARD_SSE_INTERVAL', 2),
-        'max_lifetime'  => env('VANGUARD_SSE_LIFETIME', 120),
+        'driver' => env('VANGUARD_REALTIME_DRIVER', 'polling'),
+        'interval' => env('VANGUARD_POLL_INTERVAL', 5),
+        'sse_interval' => env('VANGUARD_SSE_INTERVAL', 2),
+        'max_lifetime' => env('VANGUARD_SSE_LIFETIME', 120),
     ],
 
     /*
@@ -264,9 +268,9 @@ return [
     */
     'binaries' => [
         'mysqldump' => env('VANGUARD_MYSQLDUMP_BINARY', null),
-        'mysql'     => env('VANGUARD_MYSQL_BINARY',     null),
-        'pg_dump'   => env('VANGUARD_PG_DUMP_BINARY',   null),
-        'psql'      => env('VANGUARD_PSQL_BINARY',       null),
+        'mysql' => env('VANGUARD_MYSQL_BINARY', null),
+        'pg_dump' => env('VANGUARD_PG_DUMP_BINARY', null),
+        'psql' => env('VANGUARD_PSQL_BINARY', null),
     ],
 
 ];
