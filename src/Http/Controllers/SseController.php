@@ -5,6 +5,7 @@ namespace SoftArtisan\Vanguard\Http\Controllers;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use SoftArtisan\Vanguard\Models\BackupRecord;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
@@ -27,7 +28,7 @@ class SseController extends Controller
      */
     public function stream(Request $request): StreamedResponse
     {
-        return new StreamedResponse(function () use ($request) {
+        return new StreamedResponse(function () {
             // Remove PHP's execution time limit for the duration of this stream.
             // On Linux, sleep() does not count toward max_execution_time, but this
             // makes the behaviour explicit and portable across server configurations.
@@ -40,9 +41,9 @@ class SseController extends Controller
 
             $this->sendEvent('connected', ['status' => 'ok', 'driver' => 'sse']);
 
-            $interval    = config('vanguard.realtime.sse_interval', 2);
+            $interval = config('vanguard.realtime.sse_interval', 2);
             $maxLifetime = config('vanguard.realtime.max_lifetime', 120);
-            $started     = time();
+            $started = time();
             $lastSnapshot = $this->snapshot();
 
             // Release the DB connection immediately after the first snapshot so
@@ -63,19 +64,22 @@ class SseController extends Controller
 
                     sleep($interval);
 
-                    // Reconnect, poll, disconnect — keeps the DB slot free during sleeps.
-                    // Inner try/finally ensures disconnect even if snapshot() throws.
-                    DB::connection()->reconnect();
-                    try {
-                        $current = $this->snapshot();
-                    } finally {
-                        DB::connection()->disconnect();
+                    $current = $this->pollSnapshot();
+
+                    // Null is "this cycle told us nothing", not "nothing
+                    // changed": the next poll will see whatever it missed,
+                    // because the comparison is against the last snapshot that
+                    // actually came back.
+                    if ($current === null) {
+                        $this->sendHeartbeat();
+
+                        continue;
                     }
 
                     if ($current !== $lastSnapshot) {
                         $this->sendEvent('vanguard', [
-                            'type'    => 'backup.updated',
-                            'stats'   => $this->quickStats(),
+                            'type' => 'backup.updated',
+                            'stats' => $this->quickStats(),
                             'updated' => now()->toIso8601String(),
                         ]);
                         $lastSnapshot = $current;
@@ -92,6 +96,39 @@ class SseController extends Controller
     }
 
     // ─── Helpers ──────────────────────────────────────────────────
+
+    /**
+     * Reconnect, take one snapshot, disconnect — and survive a failure.
+     *
+     * The reconnection sits inside the loop so the connection slot is free
+     * during the sleeps, which also means a database restarted between two
+     * polls raises here. Uncaught, that exception left the streamed response
+     * and every open dashboard lost its stream at once, over a blip that cost
+     * one cycle. A failed poll is worth a log line and a heartbeat, not the
+     * connection.
+     *
+     * @return string|null The snapshot, or null when this cycle could not read it
+     */
+    protected function pollSnapshot(): ?string
+    {
+        try {
+            DB::connection()->reconnect();
+
+            try {
+                return $this->snapshot();
+            } finally {
+                DB::connection()->disconnect();
+            }
+        } catch (\Throwable $e) {
+            // Logged rather than swallowed: a database answering one poll in
+            // three looks exactly like a system where nothing is happening.
+            Log::warning('[Vanguard] The dashboard stream could not read its poll', [
+                'error' => $e->getMessage(),
+            ]);
+
+            return null;
+        }
+    }
 
     /**
      * Lightweight DB snapshot — just counts per status.
@@ -113,9 +150,9 @@ class SseController extends Controller
     protected function quickStats(): array
     {
         return [
-            'total_backups'   => BackupRecord::count(),
+            'total_backups' => BackupRecord::count(),
             'running_backups' => BackupRecord::running()->count(),
-            'failed_recent'   => BackupRecord::failed()
+            'failed_recent' => BackupRecord::failed()
                 ->where('created_at', '>=', now()->subDay())
                 ->count(),
         ];
@@ -138,10 +175,10 @@ class SseController extends Controller
     protected function sseHeaders(): array
     {
         return [
-            'Content-Type'      => 'text/event-stream',
-            'Cache-Control'     => 'no-cache, no-store',
+            'Content-Type' => 'text/event-stream',
+            'Cache-Control' => 'no-cache, no-store',
             'X-Accel-Buffering' => 'no',   // Disable Nginx buffering
-            'Connection'        => 'keep-alive',
+            'Connection' => 'keep-alive',
         ];
     }
 }
