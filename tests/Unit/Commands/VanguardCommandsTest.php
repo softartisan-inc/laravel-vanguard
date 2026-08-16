@@ -4,8 +4,10 @@ namespace SoftArtisan\Vanguard\Tests\Unit\Commands;
 
 use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Queue;
 use Mockery;
 use PHPUnit\Framework\Attributes\Test;
+use SoftArtisan\Vanguard\Jobs\RunTenantBackupJob;
 use SoftArtisan\Vanguard\Models\BackupRecord;
 use SoftArtisan\Vanguard\Services\BackupManager;
 use SoftArtisan\Vanguard\Services\BackupStorageManager;
@@ -145,6 +147,63 @@ class VanguardCommandsTest extends TestCase
 
         $this->artisan('vanguard:list --status=failed')
             ->assertSuccessful();
+    }
+
+    #[Test]
+    public function backup_command_queues_the_landlord_when_queue_is_forced(): void
+    {
+        // --queue promised to "force dispatch to queue even if
+        // queue.enabled=false"; the option was declared and read by nobody, so
+        // the backup ran inline and the flag was a no-op.
+        Queue::fake();
+        config(['vanguard.queue.enabled' => false]);
+
+        $this->artisan('vanguard:backup --landlord --queue')->assertSuccessful();
+
+        Queue::assertPushed(RunTenantBackupJob::class, fn ($job) => $job->tenantId === '__landlord__');
+    }
+
+    #[Test]
+    public function backup_command_queues_a_single_tenant_when_queue_is_forced(): void
+    {
+        Queue::fake();
+        config(['vanguard.queue.enabled' => false]);
+
+        // stancl/tenancy is a suggestion, not a dependency, so the resolver
+        // reports tenancy unavailable in the package's own test environment.
+        $tenancy = Mockery::mock(TenancyResolver::class);
+        $tenancy->shouldReceive('isEnabled')->andReturn(true);
+        $this->app->instance(TenancyResolver::class, $tenancy);
+
+        $this->artisan('vanguard:backup --tenant=acme --queue')->assertSuccessful();
+
+        Queue::assertPushed(RunTenantBackupJob::class, fn ($job) => $job->tenantId === 'acme');
+    }
+
+    #[Test]
+    public function backup_command_queues_the_filesystem_when_queue_is_forced(): void
+    {
+        Queue::fake();
+        config(['vanguard.queue.enabled' => false]);
+
+        $this->artisan('vanguard:backup --filesystem --queue')->assertSuccessful();
+
+        Queue::assertPushed(RunTenantBackupJob::class, fn ($job) => $job->tenantId === '__filesystem__');
+    }
+
+    #[Test]
+    public function backup_command_still_runs_inline_without_the_flag(): void
+    {
+        Queue::fake();
+        config(['vanguard.queue.enabled' => false]);
+
+        $manager = Mockery::mock(BackupManager::class);
+        $manager->shouldReceive('backupLandlord')->once()->andReturn($this->makeRecord());
+        $this->app->instance(BackupManager::class, $manager);
+
+        $this->artisan('vanguard:backup --landlord')->assertSuccessful();
+
+        Queue::assertNothingPushed();
     }
 
     // ─────────────────────────────────────────────────────────────

@@ -31,11 +31,11 @@ class RunTenantBackupJob implements ShouldQueue
      * Create a new job instance.
      *
      * @param  string  $tenantId  The tenant's primary key
-     * @param  array   $options   Optional backup options forwarded to BackupManager::backupTenant()
+     * @param  array  $options  Optional backup options forwarded to BackupManager::backupTenant()
      */
     public function __construct(
         public readonly string $tenantId,
-        public readonly array  $options = [],
+        public readonly array $options = [],
     ) {
         $this->timeout = (int) config('vanguard.queue.timeout', 3600);
     }
@@ -46,14 +46,18 @@ class RunTenantBackupJob implements ShouldQueue
      * The special sentinel value '__landlord__' triggers a landlord backup.
      * All other tenant IDs are resolved via TenancyResolver and delegate to
      * BackupManager::backupTenant().
-     *
-     * @param  BackupManager    $manager
-     * @param  TenancyResolver  $tenancy
      */
     public function handle(BackupManager $manager, TenancyResolver $tenancy): void
     {
         if ($this->tenantId === '__landlord__') {
             $manager->backupLandlord($this->options);
+
+            return;
+        }
+
+        if ($this->tenantId === '__filesystem__') {
+            $manager->backupFilesystem($this->options);
+
             return;
         }
 
@@ -79,8 +83,8 @@ class RunTenantBackupJob implements ShouldQueue
     {
         Log::error('[Vanguard] Backup job failed permanently after all retries', [
             'tenant_id' => $this->tenantId,
-            'error'     => $e->getMessage(),
-            'attempts'  => $this->attempts(),
+            'error' => $e->getMessage(),
+            'attempts' => $this->attempts(),
         ]);
     }
 
