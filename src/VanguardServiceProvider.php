@@ -3,23 +3,29 @@
 namespace SoftArtisan\Vanguard;
 
 use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
 use SoftArtisan\Vanguard\Commands\VanguardBackupCommand;
 use SoftArtisan\Vanguard\Commands\VanguardCleanupTmpCommand;
-use SoftArtisan\Vanguard\Commands\VanguardRestoreCommand;
+use SoftArtisan\Vanguard\Commands\VanguardInstallCommand;
 use SoftArtisan\Vanguard\Commands\VanguardListCommand;
 use SoftArtisan\Vanguard\Commands\VanguardPruneCommand;
-use SoftArtisan\Vanguard\Commands\VanguardInstallCommand;
+use SoftArtisan\Vanguard\Commands\VanguardRestoreCommand;
+use SoftArtisan\Vanguard\Console\VanguardScheduler;
+use SoftArtisan\Vanguard\Events\BackupCompleted;
+use SoftArtisan\Vanguard\Events\BackupFailed;
+use SoftArtisan\Vanguard\Listeners\SendBackupOutcomeNotification;
 use SoftArtisan\Vanguard\Services\BackupManager;
-use SoftArtisan\Vanguard\Services\RestoreService;
 use SoftArtisan\Vanguard\Services\BackupStorageManager;
-use SoftArtisan\Vanguard\Services\TenancyResolver;
 use SoftArtisan\Vanguard\Services\Drivers\DatabaseDriver;
 use SoftArtisan\Vanguard\Services\Drivers\StorageDriver;
-use SoftArtisan\Vanguard\Console\VanguardScheduler;
+use SoftArtisan\Vanguard\Services\RestoreService;
+use SoftArtisan\Vanguard\Services\TenancyResolver;
 
 class VanguardServiceProvider extends ServiceProvider
 {
@@ -79,7 +85,20 @@ class VanguardServiceProvider extends ServiceProvider
         $this->registerViews();
         $this->registerMigrations();
         $this->registerScheduler();
+        $this->registerNotificationListeners();
         $this->validateDestinationDisks();
+    }
+
+    /**
+     * Wire the backup outcome events to the notifications config.
+     *
+     * Without this, config('vanguard.notifications') describes behaviour that
+     * does not exist and a failing backup stays silent.
+     */
+    protected function registerNotificationListeners(): void
+    {
+        Event::listen(BackupFailed::class, [SendBackupOutcomeNotification::class, 'handleFailure']);
+        Event::listen(BackupCompleted::class, [SendBackupOutcomeNotification::class, 'handleSuccess']);
     }
 
     /**
@@ -125,15 +144,15 @@ class VanguardServiceProvider extends ServiceProvider
         $by = fn (Request $r) => $r->user()?->id ?: $r->ip();
 
         foreach ([
-            'vanguard.run'     => 'run',
+            'vanguard.run' => 'run',
             'vanguard.restore' => 'restore',
-            'vanguard.api'     => 'api',
+            'vanguard.api' => 'api',
         ] as $name => $key) {
             $max = (int) config("vanguard.rate_limits.{$key}", 60);
 
             RateLimiter::for($name, $max > 0
                 ? fn (Request $r) => Limit::perMinute($max)->by($by($r))
-                : fn ()           => Limit::none(),
+                : fn () => Limit::none(),
             );
         }
     }
@@ -181,8 +200,8 @@ class VanguardServiceProvider extends ServiceProvider
     protected function routeConfiguration(): array
     {
         return [
-            'domain'     => config('vanguard.domain', null),
-            'prefix'     => config('vanguard.path', 'vanguard'),
+            'domain' => config('vanguard.domain', null),
+            'prefix' => config('vanguard.path', 'vanguard'),
             'middleware' => config('vanguard.middleware', ['web']),
         ];
     }
@@ -218,7 +237,7 @@ class VanguardServiceProvider extends ServiceProvider
     {
         $checks = [
             'remote' => 'vanguard.destinations.remote',
-            'ftp'    => 'vanguard.destinations.ftp',
+            'ftp' => 'vanguard.destinations.ftp',
         ];
 
         foreach ($checks as $label => $configKey) {
@@ -229,9 +248,9 @@ class VanguardServiceProvider extends ServiceProvider
             $disk = config("{$configKey}.disk");
 
             if (empty(config("filesystems.disks.{$disk}"))) {
-                \Illuminate\Support\Facades\Log::warning(
+                Log::warning(
                     "[Vanguard] The {$label} destination is enabled but disk [{$disk}] is not declared "
-                    ."in config/filesystems.php. Backups will fail until this is resolved."
+                    .'in config/filesystems.php. Backups will fail until this is resolved.'
                 );
             }
         }
@@ -247,7 +266,7 @@ class VanguardServiceProvider extends ServiceProvider
     {
         $this->app->booted(function () {
             app(VanguardScheduler::class)->schedule(
-                $this->app->make(\Illuminate\Console\Scheduling\Schedule::class)
+                $this->app->make(Schedule::class)
             );
         });
     }
