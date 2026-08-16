@@ -2,8 +2,8 @@
 
 namespace SoftArtisan\Vanguard\Tests\Unit\Commands;
 
+use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Queue;
 use Mockery;
 use PHPUnit\Framework\Attributes\Test;
 use SoftArtisan\Vanguard\Models\BackupRecord;
@@ -12,6 +12,7 @@ use SoftArtisan\Vanguard\Services\BackupStorageManager;
 use SoftArtisan\Vanguard\Services\RestoreService;
 use SoftArtisan\Vanguard\Services\TenancyResolver;
 use SoftArtisan\Vanguard\Tests\TestCase;
+use SoftArtisan\Vanguard\VanguardServiceProvider;
 
 class VanguardCommandsTest extends TestCase
 {
@@ -195,6 +196,52 @@ class VanguardCommandsTest extends TestCase
         $this->assertSame(7, config('vanguard.retention.days'));
     }
 
+    #[Test]
+    public function prune_command_honours_a_retention_of_zero_days(): void
+    {
+        // "0" is falsy in PHP, so --days=0 — purge everything — was silently
+        // ignored and the configured retention applied instead, under a
+        // success message.
+        config(['vanguard.retention.days' => 14]);
+
+        $store = Mockery::mock(BackupStorageManager::class);
+        $store->shouldReceive('pruneOldBackups')->once()->andReturn(0);
+        $this->app->instance(BackupStorageManager::class, $store);
+
+        $this->artisan('vanguard:prune --days=0')->assertSuccessful();
+
+        $this->assertSame(0, config('vanguard.retention.days'));
+    }
+
+    #[Test]
+    public function prune_command_refuses_a_retention_that_is_not_a_number(): void
+    {
+        // (int) 'abc' is 0, which would have silently pruned every backup.
+        config(['vanguard.retention.days' => 14]);
+
+        $store = Mockery::mock(BackupStorageManager::class);
+        $store->shouldNotReceive('pruneOldBackups');
+        $this->app->instance(BackupStorageManager::class, $store);
+
+        $this->artisan('vanguard:prune --days=abc')->assertFailed();
+
+        $this->assertSame(14, config('vanguard.retention.days'));
+    }
+
+    #[Test]
+    public function prune_command_refuses_a_negative_retention(): void
+    {
+        config(['vanguard.retention.days' => 14]);
+
+        $store = Mockery::mock(BackupStorageManager::class);
+        $store->shouldNotReceive('pruneOldBackups');
+        $this->app->instance(BackupStorageManager::class, $store);
+
+        $this->artisan('vanguard:prune --days=-3')->assertFailed();
+
+        $this->assertSame(14, config('vanguard.retention.days'));
+    }
+
     // ─────────────────────────────────────────────────────────────
     // vanguard:restore
     // ─────────────────────────────────────────────────────────────
@@ -374,7 +421,7 @@ class VanguardCommandsTest extends TestCase
     {
         config([
             'vanguard.destinations.ftp.enabled' => true,
-            'vanguard.destinations.ftp.disk'    => 'ftp_missing',
+            'vanguard.destinations.ftp.disk' => 'ftp_missing',
             // 'filesystems.disks.ftp_missing' is intentionally absent
         ]);
 
@@ -406,10 +453,10 @@ class VanguardCommandsTest extends TestCase
 
         config([
             'vanguard.destinations.ftp.enabled' => true,
-            'vanguard.destinations.ftp.disk'    => 'nonexistent_ftp_disk',
+            'vanguard.destinations.ftp.disk' => 'nonexistent_ftp_disk',
         ]);
 
-        $sp = new \SoftArtisan\Vanguard\VanguardServiceProvider($this->app);
+        $sp = new VanguardServiceProvider($this->app);
         $sp->boot();
 
         Log::shouldHaveReceived('warning')
@@ -425,10 +472,10 @@ class VanguardCommandsTest extends TestCase
 
         config([
             'vanguard.destinations.remote.enabled' => true,
-            'vanguard.destinations.remote.disk'    => 'nonexistent_s3_disk',
+            'vanguard.destinations.remote.disk' => 'nonexistent_s3_disk',
         ]);
 
-        $sp = new \SoftArtisan\Vanguard\VanguardServiceProvider($this->app);
+        $sp = new VanguardServiceProvider($this->app);
         $sp->boot();
 
         Log::shouldHaveReceived('warning')
@@ -443,11 +490,11 @@ class VanguardCommandsTest extends TestCase
         Log::spy();
 
         config([
-            'vanguard.destinations.ftp.enabled'   => false,
+            'vanguard.destinations.ftp.enabled' => false,
             'vanguard.destinations.remote.enabled' => false,
         ]);
 
-        $sp = new \SoftArtisan\Vanguard\VanguardServiceProvider($this->app);
+        $sp = new VanguardServiceProvider($this->app);
         $sp->boot();
 
         Log::shouldNotHaveReceived('warning');
@@ -462,7 +509,7 @@ class VanguardCommandsTest extends TestCase
     public function cleanup_tmp_command_is_registered(): void
     {
         $this->assertTrue(
-            $this->app->make(\Illuminate\Contracts\Console\Kernel::class)
+            $this->app->make(Kernel::class)
                 ->all()['vanguard:cleanup-tmp'] !== null
         );
     }
