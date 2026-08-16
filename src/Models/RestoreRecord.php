@@ -5,6 +5,8 @@ namespace SoftArtisan\Vanguard\Models;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Arr;
+use Illuminate\Support\Str;
 
 /**
  * One restore, as it happened.
@@ -84,21 +86,70 @@ class RestoreRecord extends Model
 
     public function markRunning(): void
     {
-        $this->update(['status' => 'running', 'started_at' => now()]);
+        $this->forceUpdate(['status' => 'running', 'started_at' => now()]);
     }
 
     public function markPhase(string $phase): void
     {
-        $this->update(['phase' => $phase]);
+        $this->forceUpdate(['phase' => $phase]);
     }
 
     public function markCompleted(): void
     {
-        $this->update(['status' => 'completed', 'phase' => null, 'completed_at' => now()]);
+        $this->forceUpdate(['status' => 'completed', 'phase' => null, 'completed_at' => now()]);
     }
 
-    public function markFailed(string $error): void
+    /**
+     * @param  array  $extra  Additional columns to write alongside the
+     *                        failure, e.g. ['started_at' => now()] for a row
+     *                        that failed before it ever ran. forceUpdate()
+     *                        only writes the keys it is given, so a caller
+     *                        that also wants started_at set must pass it here
+     *                        rather than fill()ing it beforehand.
+     */
+    public function markFailed(string $error, array $extra = []): void
     {
-        $this->update(['status' => 'failed', 'error' => $error, 'completed_at' => now()]);
+        // Truncated: 'error' is a MySQL text column (65,535 bytes), and
+        // DatabaseDriver builds messages from captured stderr — a bad dump
+        // replayed through psql routinely exceeds that. Under strict mode an
+        // unbounded value throws here, which would suppress the alert that
+        // follows this call.
+        $this->forceUpdate(array_merge($extra, [
+            'status' => 'failed',
+            'error' => Str::limit($error, 60000),
+            'completed_at' => now(),
+        ]));
+    }
+
+    /**
+     * Write straight to the row by primary key, bypassing Eloquent's
+     * dirty-attribute tracking.
+     *
+     * A restore's phase can be written by a raw query on a pinned connection
+     * while the tenancy layer has the default connection swapped (see
+     * RunRestoreJob::handle()), which never touches this instance's
+     * in-memory attributes. save()'s normal dirty-check would then compare
+     * a field like 'phase' against a stale in-memory value, see no change,
+     * and silently drop it from the UPDATE — e.g. markCompleted() resetting
+     * phase to null would no-op because the instance never knew a raw write
+     * had already moved it away from null. Every "mark" transition writes
+     * the fields it names unconditionally instead.
+     */
+    protected function forceUpdate(array $attributes): void
+    {
+        $attributes['updated_at'] = now();
+
+        // forceFill() runs every value through setAttribute(), which
+        // stringifies the datetime casts (started_at, completed_at,
+        // updated_at) exactly the way save() would. The raw query below
+        // needs those normalized values, not raw Carbon instances — it
+        // talks to the query builder directly rather than through save().
+        $this->forceFill($attributes);
+
+        $this->newQueryWithoutScopes()
+            ->where($this->getKeyName(), $this->getKey())
+            ->update(Arr::only($this->getAttributes(), array_keys($attributes)));
+
+        $this->syncOriginal();
     }
 }

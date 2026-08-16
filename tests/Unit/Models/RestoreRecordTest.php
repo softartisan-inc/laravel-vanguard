@@ -64,6 +64,24 @@ class RestoreRecordTest extends TestCase
     }
 
     #[Test]
+    public function mark_failed_truncates_an_oversized_error_before_it_reaches_the_text_column(): void
+    {
+        // Finding 3 (part 1): 'error' is a MySQL text column (65,535 bytes).
+        // DatabaseDriver builds messages from captured stderr, and a bad
+        // dump replayed through psql routinely exceeds that limit.
+        $restore = $this->makeRestore(['status' => 'running']);
+
+        $huge = str_repeat('x', 100_000);
+
+        $restore->markFailed($huge);
+
+        $stored = $restore->fresh()->error;
+
+        $this->assertLessThan(65535, strlen($stored));
+        $this->assertNotSame($huge, $stored);
+    }
+
+    #[Test]
     public function it_filters_by_status_and_tenant(): void
     {
         $this->makeRestore(['status' => 'completed', 'tenant_id' => '9001']);

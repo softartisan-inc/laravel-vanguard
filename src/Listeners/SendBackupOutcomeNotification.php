@@ -5,6 +5,7 @@ namespace SoftArtisan\Vanguard\Listeners;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Notification;
+use Illuminate\Support\Str;
 use SoftArtisan\Vanguard\Events\BackupCompleted;
 use SoftArtisan\Vanguard\Events\BackupFailed;
 use SoftArtisan\Vanguard\Events\RestoreFailed;
@@ -132,12 +133,32 @@ class SendBackupOutcomeNotification
 
         try {
             Http::timeout(10)->post($webhook, [
-                'text' => sprintf(':rotating_light: Vanguard restore #%d (%s) failed: %s', $record->id, $target, $error),
+                'text' => sprintf(
+                    ':rotating_light: Vanguard restore #%d (%s) failed: %s (full error on the restore record)',
+                    $record->id,
+                    $target,
+                    $this->summarizeRestoreError($error),
+                ),
             ]);
         } catch (\Throwable $e) {
             Log::error('[Vanguard] Could not send the restore notification to Slack', [
                 'error' => $e->getMessage(),
             ]);
         }
+    }
+
+    /**
+     * Reduce an error to its headline: the first line, capped at 500 chars.
+     *
+     * Database client errors routinely carry the DB host and user in later
+     * lines. This webhook posts to a third-party service; only the headline
+     * leaves the server. The complete text stays on the restore record,
+     * which sits behind the dashboard's authentication.
+     */
+    protected function summarizeRestoreError(string $error): string
+    {
+        $firstLine = explode("\n", trim($error), 2)[0];
+
+        return Str::limit($firstLine, 500);
     }
 }
