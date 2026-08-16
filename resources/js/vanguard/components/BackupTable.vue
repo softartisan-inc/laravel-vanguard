@@ -33,11 +33,13 @@
           <td v-if="withActions">
             <div class="action-row">
               <!-- The whole record, not just the id: the restore dialog has
-                   to know which target the operator must type back. -->
+                   to know which target the operator must type back, and the
+                   delete dialog names the target and the date so the operator
+                   confirms an archive rather than a number. -->
               <button class="btn btn-ghost btn-sm" @click="$emit('restore', r)">
                 ↩ Restore
               </button>
-              <button class="btn btn-danger btn-sm" @click="$emit('delete', r.id)">
+              <button class="btn btn-danger btn-sm" @click="$emit('delete', r)">
                 ✕
               </button>
             </div>

@@ -186,7 +186,7 @@ class BackupStorageManager
         // Remote first — stream while bundlePath is still on disk.
         // Flysystem's S3 adapter automatically uses multipart upload for large streams.
         if (config('vanguard.destinations.remote.enabled', false)) {
-            $remoteDisk = config('vanguard.destinations.remote.disk', 's3');
+            $remoteDisk = $this->destinationDisk('remote', 's3');
             $remotePath = config('vanguard.destinations.remote.path', 'vanguard-backups')."/{$name}.tar";
             $ok = $this->putStream($remoteDisk, $remotePath, $bundlePath);
             if (! $ok) {
@@ -197,7 +197,7 @@ class BackupStorageManager
 
         // FTP/SFTP — stream after remote so bundlePath is still available.
         if (config('vanguard.destinations.ftp.enabled', false)) {
-            $ftpDisk = config('vanguard.destinations.ftp.disk', 'ftp');
+            $ftpDisk = $this->destinationDisk('ftp', 'ftp');
             $ftpPath = config('vanguard.destinations.ftp.path', 'vanguard-backups')."/{$name}.tar";
             $ok = $this->putStream($ftpDisk, $ftpPath, $bundlePath);
             if (! $ok) {
@@ -208,7 +208,7 @@ class BackupStorageManager
 
         // Local last — attempt zero-copy rename(); fall back to stream if needed.
         if (config('vanguard.destinations.local.enabled', true)) {
-            $localDisk = config('vanguard.destinations.local.disk', 'local');
+            $localDisk = $this->destinationDisk('local', 'local');
             $localPath = config('vanguard.destinations.local.path', 'vanguard-backups')."/{$name}.tar";
             $ok = $this->persistToLocalDisk($bundlePath, $localDisk, $localPath);
             if (! $ok) {
@@ -218,6 +218,43 @@ class BackupStorageManager
         }
 
         return $result;
+    }
+
+    /**
+     * The disk an enabled destination writes to, refusing to invent one.
+     *
+     * Storage::disk() treats any falsy name as a request for the application's
+     * *default* disk, so a destination configured with a blank disk — which is
+     * exactly what VANGUARD_REMOTE_DISK= in a .env produces, the key being
+     * present so the config default never applies — used to succeed loudly and
+     * write the archive somewhere nobody had chosen, while the health screen
+     * reported nothing at all. A null one crashed several frames down with a
+     * TypeError naming an argument rather than the setting.
+     *
+     * Both are the same misconfiguration and both are refused here, by name, at
+     * the point where the answer is still comprehensible. A backup that lands
+     * where it was never addressed is worse than a backup that failed: the
+     * failure is visible.
+     *
+     * @param  string  $name  Destination name: 'local' | 'remote' | 'ftp'
+     * @param  string  $fallback  The disk to use when the key is absent entirely
+     *
+     * @throws RuntimeException When the destination is enabled and names no disk
+     */
+    protected function destinationDisk(string $name, string $fallback): string
+    {
+        $disk = config("vanguard.destinations.{$name}.disk", $fallback);
+        $disk = is_string($disk) ? trim($disk) : '';
+
+        if ($disk === '') {
+            throw new RuntimeException(
+                "[Vanguard] Destination [{$name}] is enabled but names no disk. Set "
+                ."vanguard.destinations.{$name}.disk to a disk declared in config/filesystems.php, "
+                .'or disable the destination. Refusing to fall back to the default disk.'
+            );
+        }
+
+        return $disk;
     }
 
     /**

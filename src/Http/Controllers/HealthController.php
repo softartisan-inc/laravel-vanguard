@@ -62,9 +62,24 @@ class HealthController extends Controller
 
             // A disabled destination is not probed, and reports writable=null:
             // unknown, not false. Nothing was tried, so nothing is claimed.
-            [$writable, $reason] = $enabled && $disk
-                ? $this->probe((string) $disk, (string) $path)
-                : [null, null];
+            //
+            // Enabled with no disk is a different answer, and it used to give
+            // this one: a failure, named. Nothing can be probed, but something
+            // is definitely wrong — the operator switched the destination on
+            // and the write path has nowhere to put the archive, so it either
+            // dies mid-backup or, for a blank name, quietly falls through to
+            // the application's default disk (BackupStorageManager refuses
+            // both now).
+            [$writable, $reason] = match (true) {
+                ! $enabled => [null, null],
+                $this->diskName($disk) === '' => [false, sprintf(
+                    'Destination [%s] is enabled but names no disk: set vanguard.destinations.%s.disk '
+                    .'to a disk declared in config/filesystems.php.',
+                    $name,
+                    $name,
+                )],
+                default => $this->probe($this->diskName($disk), (string) $path),
+            };
 
             $out[] = [
                 'name' => $name,
@@ -77,6 +92,21 @@ class HealthController extends Controller
         }
 
         return $out;
+    }
+
+    /**
+     * The disk name a destination actually resolves to, or '' when it has none.
+     *
+     * Null and blank are the same configuration seen from two angles — an
+     * unset key, and VANGUARD_REMOTE_DISK= in a .env file, which produces an
+     * empty string the config default never gets to replace — so both answer
+     * "no disk" rather than one crashing and one silently using the default.
+     *
+     * @param  mixed  $disk  The raw value of vanguard.destinations.<name>.disk
+     */
+    protected function diskName(mixed $disk): string
+    {
+        return is_string($disk) ? trim($disk) : '';
     }
 
     /**
@@ -160,7 +190,17 @@ class HealthController extends Controller
             'last_seen_at' => $lastSeen?->toIso8601String(),
             // No stamp at all is the March 2026 shape: a flawless
             // configuration and a cron that never ran once.
-            'alive' => $lastSeen !== null && $lastSeen->greaterThan(now()->subSeconds(2 * $interval)),
+            //
+            // The boundary is inclusive — a heartbeat landing exactly on twice
+            // the interval is still alive — because that is the answer the
+            // freshness rows have always given to the same question, and one
+            // page cannot resolve one rule two ways: a red cron beside a green
+            // freshness row on the same timestamp tells the operator nothing
+            // except that one of them is wrong. Inclusive is also the reading
+            // the tolerance was chosen for: twice the interval is what a run
+            // may slip by, and a run that slipped by exactly that has not yet
+            // missed anything. The alarm belongs one second later.
+            'alive' => $lastSeen !== null && $lastSeen->greaterThanOrEqualTo(now()->subSeconds(2 * $interval)),
         ];
     }
 
@@ -475,6 +515,10 @@ class HealthController extends Controller
             // Twice the interval, not once, so a run that slipped or a backup
             // that took an hour raises no false alarm. Never backed up counts
             // as stale: it is the worse case, not the unknown one.
+            //
+            // The comparison is strict, so exactly twice the threshold is still
+            // fresh — the same inclusive boundary schedule() applies to the
+            // heartbeat. The two say the same thing about the same instant.
             'stale' => $age === null || $age > $threshold,
         ];
     }

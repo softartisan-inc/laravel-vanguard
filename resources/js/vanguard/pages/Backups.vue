@@ -37,7 +37,7 @@
         :records="backups.data"
         :with-actions="true"
         @restore="askRestore"
-        @delete="confirmDelete"
+        @delete="askDelete"
       />
     </div>
 
@@ -47,23 +47,31 @@
       @close="restoring = null"
       @success="load(backups.meta?.current_page ?? 1)"
     />
+
+    <DeleteModal
+      v-if="deleting"
+      :record="deleting"
+      @close="deleting = null"
+      @success="load(backups.meta?.current_page ?? 1)"
+    />
   </div>
 </template>
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import BackupTable  from '../components/BackupTable.vue'
+import DeleteModal  from '../components/DeleteModal.vue'
 import RestoreModal from '../components/RestoreModal.vue'
 import VPagination  from '../components/VPagination.vue'
 import { useBackups } from '../composables/useBackups.js'
-import { useToast }   from '../composables/useToast.js'
 
-const { backups, loading, fetchBackups, deleteBackup } = useBackups()
-const toast = useToast()
+const { backups, loading, fetchBackups } = useBackups()
 
 const filters   = reactive({ status: '', type: '' })
 // The record being restored, or null when the dialog is closed.
 const restoring = ref(null)
+// The record being deleted, likewise.
+const deleting  = ref(null)
 
 async function load(page = 1) {
   const f = {}
@@ -72,15 +80,18 @@ async function load(page = 1) {
   await fetchBackups(page, f)
 }
 
-async function confirmDelete(id) {
-  if (!confirm(`Delete backup #${id}? This will remove the archive file.`)) return
-  try {
-    await deleteBackup(id)
-    toast.success('Backup deleted.')
-    load(backups.value?.meta?.current_page ?? 1)
-  } catch (e) {
-    toast.error(e.message)
-  }
+/**
+ * Deleting an archive is irreversible, so it gets the theme's own dialog rather
+ * than the browser's confirm(): a native prompt says only "#41", cannot show
+ * which target or which date is about to disappear, and is the one dialog a
+ * browser is allowed to stop showing — after a few of them Chrome offers to
+ * suppress further prompts from the page, and a suppressed confirm() returns
+ * false silently, so the button would simply stop working with no sign why.
+ * No name to type back, though: that guard is reserved for restore and prune.
+ * DeleteModal reports the outcome.
+ */
+function askDelete(record) {
+  deleting.value = record
 }
 
 /**
