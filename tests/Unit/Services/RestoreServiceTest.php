@@ -16,17 +16,20 @@ use SoftArtisan\Vanguard\Tests\TestCase;
 class RestoreServiceTest extends TestCase
 {
     private MockInterface $db;
+
     private MockInterface $storage;
+
     private MockInterface $store;
+
     private RestoreService $restoreService;
 
     protected function setUp(): void
     {
         parent::setUp();
 
-        $this->db      = Mockery::mock(DatabaseDriver::class);
+        $this->db = Mockery::mock(DatabaseDriver::class);
         $this->storage = Mockery::mock(StorageDriver::class);
-        $this->store   = Mockery::mock(BackupStorageManager::class);
+        $this->store = Mockery::mock(BackupStorageManager::class);
 
         $this->store->shouldReceive('cleanTmp')->byDefault()->andReturnNull();
 
@@ -73,9 +76,9 @@ class RestoreServiceTest extends TestCase
     public function it_throws_when_the_backup_reached_no_destination_at_all(): void
     {
         $record = $this->makeRecord([
-            'file_path'   => null,
+            'file_path' => null,
             'remote_path' => null,
-            'ftp_path'    => null,
+            'ftp_path' => null,
         ]);
 
         $this->expectException(RuntimeException::class);
@@ -92,9 +95,9 @@ class RestoreServiceTest extends TestCase
     public function it_throws_when_checksum_fails_verification(): void
     {
         $record = $this->makeRecord([
-            'type'      => 'landlord',
+            'type' => 'landlord',
             'file_path' => 'backups/landlord.tar',
-            'checksum'  => str_repeat('a', 64),
+            'checksum' => str_repeat('a', 64),
         ]);
 
         $this->store->shouldReceive('download')->once()->andReturn('/tmp/landlord.tar');
@@ -110,9 +113,9 @@ class RestoreServiceTest extends TestCase
     public function it_skips_checksum_verification_when_option_is_false(): void
     {
         $record = $this->makeRecord([
-            'type'      => 'landlord',
+            'type' => 'landlord',
             'file_path' => 'backups/landlord.tar',
-            'checksum'  => str_repeat('a', 64),
+            'checksum' => str_repeat('a', 64),
         ]);
 
         $this->store->shouldReceive('download')->once()->andReturn('/tmp/landlord.tar');
@@ -129,15 +132,47 @@ class RestoreServiceTest extends TestCase
     // ─────────────────────────────────────────────────────────────
 
     #[Test]
+    public function it_keeps_the_backup_catalogue_when_the_landlord_database_is_restored(): void
+    {
+        config(['database.default' => 'sqlite']);
+        config(['database.connections.sqlite' => ['driver' => 'sqlite', 'database' => ':memory:']]);
+
+        $record = $this->makeRecord(['type' => 'landlord', 'file_path' => 'backups/landlord.tar', 'checksum' => null]);
+        $newer = $this->makeRecord(['type' => 'landlord', 'file_path' => 'backups/later.tar', 'checksum' => null]);
+
+        $this->store->shouldReceive('download')->once()->andReturn('/tmp/landlord.tar');
+        $this->store->shouldReceive('unBundle')->once()->andReturn(['database' => '/tmp/landlord_db.sql.gz']);
+
+        // The landlord dump carries the vanguard_backups table as it stood mid-run:
+        // the backup being restored was still 'running' and the later one did not exist.
+        $this->db->shouldReceive('restore')->once()->andReturnUsing(function () use ($record) {
+            BackupRecord::query()->delete();
+            $this->makeRecord(['id' => $record->id, 'type' => 'landlord', 'status' => 'running']);
+        });
+
+        $this->restoreService->restore($record, ['verify_checksum' => false]);
+
+        $this->assertSame(
+            'completed',
+            BackupRecord::find($record->id)->status,
+            'restoring a backup must not mark that same backup as running again',
+        );
+        $this->assertNotNull(
+            BackupRecord::find($newer->id),
+            'backups taken after the dump must survive the restore',
+        );
+    }
+
+    #[Test]
     public function it_restores_landlord_database_from_backup(): void
     {
         config(['database.default' => 'sqlite']);
         config(['database.connections.sqlite' => ['driver' => 'sqlite', 'database' => ':memory:']]);
 
         $record = $this->makeRecord([
-            'type'      => 'landlord',
+            'type' => 'landlord',
             'file_path' => 'backups/landlord.tar',
-            'checksum'  => null,
+            'checksum' => null,
         ]);
 
         $this->store->shouldReceive('download')->once()->andReturn('/tmp/landlord.tar');
@@ -158,9 +193,9 @@ class RestoreServiceTest extends TestCase
     public function it_skips_db_restore_when_option_is_false(): void
     {
         $record = $this->makeRecord([
-            'type'      => 'landlord',
+            'type' => 'landlord',
             'file_path' => 'backups/landlord.tar',
-            'checksum'  => null,
+            'checksum' => null,
         ]);
 
         $this->store->shouldReceive('download')->once()->andReturn('/tmp/landlord.tar');
@@ -170,7 +205,7 @@ class RestoreServiceTest extends TestCase
 
         $result = $this->restoreService->restore($record, [
             'verify_checksum' => false,
-            'restore_db'      => false,
+            'restore_db' => false,
         ]);
 
         $this->assertTrue($result);
@@ -180,9 +215,9 @@ class RestoreServiceTest extends TestCase
     public function it_restores_filesystem_when_restore_storage_is_true(): void
     {
         $record = $this->makeRecord([
-            'type'      => 'landlord',
+            'type' => 'landlord',
             'file_path' => 'backups/landlord.tar',
-            'checksum'  => null,
+            'checksum' => null,
         ]);
 
         $this->store->shouldReceive('download')->once()->andReturn('/tmp/landlord.tar');
@@ -196,7 +231,7 @@ class RestoreServiceTest extends TestCase
 
         $result = $this->restoreService->restore($record, [
             'verify_checksum' => false,
-            'restore_db'      => false,
+            'restore_db' => false,
             'restore_storage' => true,
         ]);
 
@@ -207,9 +242,9 @@ class RestoreServiceTest extends TestCase
     public function it_skips_filesystem_restore_when_restore_storage_is_false(): void
     {
         $record = $this->makeRecord([
-            'type'      => 'landlord',
+            'type' => 'landlord',
             'file_path' => 'backups/landlord.tar',
-            'checksum'  => null,
+            'checksum' => null,
         ]);
 
         $this->store->shouldReceive('download')->once()->andReturn('/tmp/landlord.tar');
@@ -219,7 +254,7 @@ class RestoreServiceTest extends TestCase
 
         $result = $this->restoreService->restore($record, [
             'verify_checksum' => false,
-            'restore_db'      => false,
+            'restore_db' => false,
             'restore_storage' => false, // default
         ]);
 
@@ -234,9 +269,9 @@ class RestoreServiceTest extends TestCase
     public function it_restores_filesystem_type_backup(): void
     {
         $record = $this->makeRecord([
-            'type'      => 'filesystem',
+            'type' => 'filesystem',
             'file_path' => 'backups/fs.tar',
-            'checksum'  => null,
+            'checksum' => null,
         ]);
 
         $this->store->shouldReceive('download')->once()->andReturn('/tmp/fs_bundle.tar');
@@ -257,9 +292,9 @@ class RestoreServiceTest extends TestCase
     public function it_throws_for_unknown_backup_type(): void
     {
         $record = $this->makeRecord([
-            'type'      => 'unknown_type',
+            'type' => 'unknown_type',
             'file_path' => 'backups/mystery.tar',
-            'checksum'  => null,
+            'checksum' => null,
         ]);
 
         $this->store->shouldReceive('download')->once()->andReturn('/tmp/mystery.tar');
@@ -279,11 +314,11 @@ class RestoreServiceTest extends TestCase
     public function it_uses_local_path_by_default(): void
     {
         $record = $this->makeRecord([
-            'type'        => 'landlord',
-            'file_path'   => 'backups/local.tar',
+            'type' => 'landlord',
+            'file_path' => 'backups/local.tar',
             'remote_path' => 'backups/remote.tar',
-            'ftp_path'    => 'backups/ftp.tar',
-            'checksum'    => null,
+            'ftp_path' => 'backups/ftp.tar',
+            'checksum' => null,
         ]);
 
         $this->store->shouldReceive('download')
@@ -295,7 +330,7 @@ class RestoreServiceTest extends TestCase
 
         $result = $this->restoreService->restore($record, [
             'verify_checksum' => false,
-            'restore_db'      => false,
+            'restore_db' => false,
         ]);
 
         $this->assertTrue($result);
@@ -305,10 +340,10 @@ class RestoreServiceTest extends TestCase
     public function it_uses_remote_path_when_source_is_remote(): void
     {
         $record = $this->makeRecord([
-            'type'        => 'landlord',
-            'file_path'   => 'backups/local.tar',
+            'type' => 'landlord',
+            'file_path' => 'backups/local.tar',
             'remote_path' => 'backups/remote.tar',
-            'checksum'    => null,
+            'checksum' => null,
         ]);
 
         $this->store->shouldReceive('download')
@@ -320,8 +355,8 @@ class RestoreServiceTest extends TestCase
 
         $result = $this->restoreService->restore($record, [
             'verify_checksum' => false,
-            'restore_db'      => false,
-            'source'          => 'remote',
+            'restore_db' => false,
+            'source' => 'remote',
         ]);
 
         $this->assertTrue($result);
@@ -331,10 +366,10 @@ class RestoreServiceTest extends TestCase
     public function it_uses_ftp_path_when_source_is_ftp(): void
     {
         $record = $this->makeRecord([
-            'type'      => 'landlord',
+            'type' => 'landlord',
             'file_path' => 'backups/local.tar',
-            'ftp_path'  => 'backups/ftp.tar',
-            'checksum'  => null,
+            'ftp_path' => 'backups/ftp.tar',
+            'checksum' => null,
         ]);
 
         $this->store->shouldReceive('download')
@@ -346,8 +381,8 @@ class RestoreServiceTest extends TestCase
 
         $result = $this->restoreService->restore($record, [
             'verify_checksum' => false,
-            'restore_db'      => false,
-            'source'          => 'ftp',
+            'restore_db' => false,
+            'source' => 'ftp',
         ]);
 
         $this->assertTrue($result);
@@ -357,10 +392,10 @@ class RestoreServiceTest extends TestCase
     public function it_throws_when_ftp_path_is_null_but_source_is_ftp(): void
     {
         $record = $this->makeRecord([
-            'type'      => 'landlord',
+            'type' => 'landlord',
             'file_path' => 'backups/local.tar',
-            'ftp_path'  => null,
-            'checksum'  => null,
+            'ftp_path' => null,
+            'checksum' => null,
         ]);
 
         $this->expectException(RuntimeException::class);
@@ -368,7 +403,7 @@ class RestoreServiceTest extends TestCase
 
         $this->restoreService->restore($record, [
             'verify_checksum' => false,
-            'source'          => 'ftp',
+            'source' => 'ftp',
         ]);
     }
 
@@ -377,10 +412,10 @@ class RestoreServiceTest extends TestCase
     {
         // The recommended production setup: local disabled, remote only.
         $record = $this->makeRecord([
-            'type'        => 'landlord',
-            'file_path'   => null,
+            'type' => 'landlord',
+            'file_path' => null,
             'remote_path' => 'backups/remote.tar',
-            'checksum'    => null,
+            'checksum' => null,
         ]);
 
         $this->store->shouldReceive('download')
@@ -392,7 +427,7 @@ class RestoreServiceTest extends TestCase
 
         $result = $this->restoreService->restore($record, [
             'verify_checksum' => false,
-            'restore_db'      => false,
+            'restore_db' => false,
         ]);
 
         $this->assertTrue($result);
@@ -402,11 +437,11 @@ class RestoreServiceTest extends TestCase
     public function it_falls_back_to_the_ftp_copy_when_it_is_the_only_one(): void
     {
         $record = $this->makeRecord([
-            'type'        => 'landlord',
-            'file_path'   => null,
+            'type' => 'landlord',
+            'file_path' => null,
             'remote_path' => null,
-            'ftp_path'    => 'backups/ftp.tar',
-            'checksum'    => null,
+            'ftp_path' => 'backups/ftp.tar',
+            'checksum' => null,
         ]);
 
         $this->store->shouldReceive('download')
@@ -418,7 +453,7 @@ class RestoreServiceTest extends TestCase
 
         $result = $this->restoreService->restore($record, [
             'verify_checksum' => false,
-            'restore_db'      => false,
+            'restore_db' => false,
         ]);
 
         $this->assertTrue($result);
@@ -428,7 +463,7 @@ class RestoreServiceTest extends TestCase
     public function it_lists_the_available_destinations_when_the_requested_one_is_empty(): void
     {
         $record = $this->makeRecord([
-            'file_path'   => null,
+            'file_path' => null,
             'remote_path' => 'backups/remote.tar',
         ]);
 
@@ -437,7 +472,7 @@ class RestoreServiceTest extends TestCase
 
         $this->restoreService->restore($record, [
             'verify_checksum' => false,
-            'source'          => 'local',
+            'source' => 'local',
         ]);
     }
 
@@ -445,9 +480,9 @@ class RestoreServiceTest extends TestCase
     public function it_always_cleans_tmp_even_when_restore_throws(): void
     {
         $record = $this->makeRecord([
-            'type'      => 'landlord',
+            'type' => 'landlord',
             'file_path' => 'backups/landlord.tar',
-            'checksum'  => null,
+            'checksum' => null,
         ]);
 
         $this->store->shouldReceive('download')->once()->andReturn('/tmp/landlord.tar');
