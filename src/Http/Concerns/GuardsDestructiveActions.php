@@ -53,9 +53,6 @@ trait GuardsDestructiveActions
      */
     protected function trace(string $action, string $target, array $context = []): void
     {
-        Log::warning('[Vanguard] '.$action, array_merge([
-            'actor' => Vanguard::actor() ?? 'unknown',
-            'target' => $target,
-        ], $context));
+        Log::warning('[Vanguard] '.$action, ['actor' => Vanguard::actor() ?? 'unknown', 'target' => $target] + $context);
     }
 }

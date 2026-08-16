@@ -118,4 +118,35 @@ class GuardsDestructiveActionsTest extends TestCase
             $this->fail('Expected log call not found: '.$e->getMessage());
         }
     }
+
+    #[Test]
+    public function it_keeps_resolved_actor_and_target_authoritative_over_context_keys(): void
+    {
+        // The trace() method must resolve the actor and target values itself.
+        // Context passed by the caller should never be able to override them.
+        // A context array containing 'actor' or 'target' keys must not shadow
+        // what trace() resolved — the audit trail's identity is authoritative.
+        Vanguard::restoreActor(fn () => 'ops@system');
+
+        $logger = Log::spy();
+
+        // Caller tries to override actor and target in the context.
+        $this->guard()->trace('restore requested', 'tenant:9001', [
+            'actor' => 'malicious@attacker.com',
+            'target' => 'tenant:hacked',
+            'backup_id' => 42,
+        ]);
+
+        try {
+            $logger->shouldHaveReceived('warning')->withArgs(
+                fn (string $message, array $context) => $message === '[Vanguard] restore requested'
+                    && $context['actor'] === 'ops@system'
+                    && $context['target'] === 'tenant:9001'
+                    && $context['backup_id'] === 42,
+            );
+            $this->assertTrue(true, 'Log was called with correct arguments, context keys did not override resolved values');
+        } catch (\Exception $e) {
+            $this->fail('Expected log call not found: '.$e->getMessage());
+        }
+    }
 }
