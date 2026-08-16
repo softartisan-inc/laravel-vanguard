@@ -32,6 +32,9 @@ class RestoreService
      *                          see wipeBackedUpPaths() for the exact scope erased
      *                          - 'source'          (string) — 'local' | 'remote' | 'ftp'; omit it to
      *                          read from the first destination the backup actually reached
+     *                          - 'on_phase'        (callable) — receives (string $phase, array $context = []);
+     *                          announces progress through downloading, verifying, unpacking and the
+     *                          restore halves. Optional; a restore behaves exactly the same without it.
      * @return bool true on success
      *
      * @throws RuntimeException
@@ -43,6 +46,7 @@ class RestoreService
         $restoreStorage = $options['restore_storage'] ?? false; // opt-in: dangerous
         $wipeStorage = $options['wipe_storage'] ?? false; // opt-in: replace instead of merge
         $destination = $options['source'] ?? null; // 'local' | 'remote' | 'ftp', null to auto-detect
+        $onPhase = $options['on_phase'] ?? null;
 
         if ($record->isFailed() || $record->isRunning()) {
             throw new RuntimeException("Cannot restore a backup with status [{$record->status}].");
@@ -53,10 +57,12 @@ class RestoreService
         try {
             Log::info('[Vanguard] Starting restore', ['record_id' => $record->id]);
 
+            $this->announce($onPhase, 'downloading', ['source' => $destination]);
             $bundlePath = $this->store->download($storedPath, $destination);
 
             // Integrity check
             if ($verify && $record->checksum) {
+                $this->announce($onPhase, 'verifying');
                 if (! $this->store->verifyChecksum($bundlePath, $record->checksum)) {
                     throw new RuntimeException(
                         "Checksum mismatch for backup #{$record->id}. The file may be corrupted."
@@ -64,18 +70,19 @@ class RestoreService
                 }
             }
 
+            $this->announce($onPhase, 'unpacking');
             $components = $this->store->unBundle($bundlePath);
 
             if ($record->type === 'landlord') {
-                return $this->restoreLandlord($record, $components, $restoreDb, $restoreStorage, $wipeStorage);
+                return $this->restoreLandlord($record, $components, $restoreDb, $restoreStorage, $wipeStorage, $onPhase);
             }
 
             if ($record->type === 'tenant') {
-                return $this->restoreTenant($record, $components, $restoreDb, $restoreStorage, $wipeStorage);
+                return $this->restoreTenant($record, $components, $restoreDb, $restoreStorage, $wipeStorage, $onPhase);
             }
 
             if ($record->type === 'filesystem') {
-                return $this->restoreFilesystem($components, $wipeStorage);
+                return $this->restoreFilesystem($components, $wipeStorage, $onPhase);
             }
 
             throw new RuntimeException("Unknown backup type: [{$record->type}]");
@@ -145,9 +152,11 @@ class RestoreService
      * @param  bool  $fs  Whether to restore the filesystem
      * @param  bool  $wipe  Whether to erase the backed-up paths before extracting
      */
-    protected function restoreLandlord(BackupRecord $record, array $components, bool $db, bool $fs, bool $wipe = false): bool
+    protected function restoreLandlord(BackupRecord $record, array $components, bool $db, bool $fs, bool $wipe = false, ?callable $onPhase = null): bool
     {
         if ($db && isset($components['database'])) {
+            $this->announce($onPhase, 'restoring database');
+
             $driver = config('database.default');
             $config = config("database.connections.{$driver}");
 
@@ -159,6 +168,7 @@ class RestoreService
         }
 
         if ($fs && isset($components['storage'])) {
+            $this->announce($onPhase, 'restoring files');
             $this->extractStorage($components['storage'], $wipe);
             Log::info('[Vanguard] Landlord filesystem restored', ['record_id' => $record->id]);
         }
@@ -223,7 +233,7 @@ class RestoreService
      * @param  bool  $fs  Whether to restore the filesystem
      * @param  bool  $wipe  Whether to erase the backed-up paths before extracting
      */
-    protected function restoreTenant(BackupRecord $record, array $components, bool $db, bool $fs, bool $wipe = false): bool
+    protected function restoreTenant(BackupRecord $record, array $components, bool $db, bool $fs, bool $wipe = false, ?callable $onPhase = null): bool
     {
         $tenantModel = config('vanguard.tenancy.tenant_model', Tenant::class);
         $tenant = $tenantModel::findOrFail($record->tenant_id);
@@ -232,6 +242,8 @@ class RestoreService
 
         try {
             if ($db && isset($components['database'])) {
+                $this->announce($onPhase, 'restoring database');
+
                 $resolver = app(TenancyResolver::class);
                 $dbConf = $resolver->tenantDbConfig();
                 $this->db->restore($dbConf['driver'], $dbConf, $components['database']);
@@ -239,6 +251,7 @@ class RestoreService
             }
 
             if ($fs && isset($components['storage'])) {
+                $this->announce($onPhase, 'restoring files');
                 $this->extractStorage($components['storage'], $wipe);
                 Log::info('[Vanguard] Tenant filesystem restored', ['tenant' => $record->tenant_id]);
             }
@@ -259,9 +272,10 @@ class RestoreService
      * @param  array  $components  Extracted component paths keyed by 'storage'
      * @param  bool  $wipe  Whether to erase the backed-up paths before extracting
      */
-    protected function restoreFilesystem(array $components, bool $wipe = false): bool
+    protected function restoreFilesystem(array $components, bool $wipe = false, ?callable $onPhase = null): bool
     {
         if (isset($components['storage'])) {
+            $this->announce($onPhase, 'restoring files');
             $this->extractStorage($components['storage'], $wipe);
         }
 
@@ -357,5 +371,21 @@ class RestoreService
         }
 
         return $safe;
+    }
+
+    /**
+     * Announce the phase a restore has reached.
+     *
+     * Deliberately not a percentage: nothing in the chain — the download, tar,
+     * the database client — reports meaningful progress, and an invented
+     * percentage is a false statement. A phase is true.
+     *
+     * @param  callable|null  $onPhase  Receives (string $phase, array $context)
+     */
+    protected function announce(?callable $onPhase, string $phase, array $context = []): void
+    {
+        if ($onPhase !== null) {
+            $onPhase($phase, $context);
+        }
     }
 }
