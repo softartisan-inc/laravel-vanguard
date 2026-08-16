@@ -50,6 +50,7 @@ backups quietly got bigger, and a new archiving guard can drop a symlinked
 - **`/api/health` ran one query per tenant.** Two hundred tenants was two hundred reads per load of the landing page. It is one grouped `MAX(completed_at)` for the whole tenant list plus the landlord row: two queries, whatever the customer list looks like.
 - **Vanguard's own tables are read through `Vanguard::centralConnection()` everywhere.** Seven sites still resolved the connection themselves — the stats, listing, tenants and delete endpoints, `pruneOldBackups()`, and both sites in `RunRestoreJob`. The job was the worst: it used `config('tenancy.database.central_connection', config('database.default'))`, which answers `null` for a key that is present but null, and `RestoreRecord::on(null)` then re-resolved `database.default` *at query time* — from inside the tenancy window, the one place the connection swap is guaranteed active. Restore phases were written to the tenant database, aborting the restore.
 - **The health endpoint no longer dies with the central database.** Each section degrades on its own, so an unreachable catalogue still leaves the destination probes, the schedule and the queue readable — that outage is the one this page exists to surface.
+- **An unreachable Redis hung the health page for half a minute.** The queue depth was read through the application's own connection, so a driver that is silent rather than absent left the request sitting in the client's connect timeout — the page that reports breakage, hanging exactly when things are broken, which is worse than an error. The probe now reads through a private connection of its own with a one-and-a-half second bound: a real backlog is still reported truthfully, an unreachable driver answers `null` with the connection's own timeout as the reason, and the application's connections are left untouched. Measured on a live installation: thirty seconds before, two after. Drivers other than Redis, and Redis clusters, fall back to the ordinary read — unbounded but correct, because a probe that reports nothing on a working system is worse than a slow one.
 - `GET /api/backups/{id}/download?source=bogus` answers `422` even without an `Accept: application/json` header. `validate()` only answers `422` for JSON callers, and a direct browser navigation to a download link — this endpoint's normal invocation, not an edge case — was redirected instead of told the value was bad.
 
 ### Fixed — hardening ported from the March stash
@@ -66,14 +67,22 @@ review until this release.
 - **`--wipe-storage` has no endpoint.** Replace mode destroys what the backup does not contain, and no confirmation typed into a browser is worth that. It stays a console decision, taken by someone logged into the server, and `RunRestoreJob` hardcodes `wipe_storage => false` so no queued path can reach it either.
 - **`vanguard:install` has no endpoint.** It publishes config, runs migrations and inspects the host system; exposing it over HTTP would mean a dashboard that can rewrite its own installation. Its config-drift report is a thing to read on a terminal during an upgrade, not a button.
 
-### What the tests do not prove
-The suite is green against SQLite, fakes and a synchronous queue. Three of this
-release's central claims cannot be established that way, and are yours to check
-on your own installation:
+### What was proven outside the suite, and what was not
+The suite is green against SQLite, fakes and a synchronous queue, which cannot
+establish this release's central claims. They were therefore exercised by hand
+against a live installation — a real MariaDB, a real Redis, real archives —
+before this version was tagged. What that run showed:
 
-- **The write probe against a real bucket.** `Storage::fake()` accepts every write. The exact failure this endpoint exists to catch — a bucket that accepts a configuration, a listing and a HEAD while refusing every PUT — is the one a fake cannot reproduce. Load `/api/health` against your real destinations and confirm `writable: true` is being *earned*.
-- **The queue depth against a real driver.** The tests run `sync`, whose size is always 0. Whether `queue.pending` reports a real Redis backlog, and whether it degrades to `null` with a reason when Redis is down rather than reporting a reassuring 0, is unverified here.
-- **The scheduler stamp crossing processes.** The heartbeat is written by `schedule:run` in one process and read by a web request in another. The tests write and read it in the same process, with the same cache store. Confirm `schedule.alive` goes true on your installation after the cron has run once, and that it goes false again if you stop it.
+- **Backups, restores and tenant isolation, on a real database.** The archive's checksum matched what the command reported, its dump decompressed to exactly the live table count with real rows, a restore into a throwaway database reproduced every table, and two tenants dumped side by side shared no byte of each other's data.
+- **The queue depth against a real driver.** With one job genuinely queued, `queue.pending` reported it; against an unreachable Redis it answered `null` with the connection's own timeout as the reason, in about two seconds where the unbounded read took thirty.
+- **The scheduler stamp crossing processes.** Written by `schedule:run` in a console process, read back by another process through the shared Redis, and turning `alive: false` again once the stamp aged past twice the interval.
+- **The alerts, on real failures.** A dump forced to fail dispatched the backup-failure notification; a restore forced to fail dispatched the restore one. Neither was inferred from a green test.
+- **A restore rehearsal.** `vanguard:restore --database=` filled a throwaway database while the production one was left byte-for-byte untouched.
+
+Two claims remain unproven, and they are yours to check on your own installation:
+
+- **The write probe against a real object store.** It was proven against a real filesystem disk — the round trip happens, the witness object is removed, an unwritable path reports its true reason — but no S3-compatible endpoint was reachable in the verification environment. The exact failure this endpoint exists to catch, a bucket that accepts a configuration, a listing and a HEAD while refusing every PUT, is still the one nobody here could reproduce. Load `/api/health` against your real destinations and confirm `writable: true` is being *earned*.
+- **The tenancy switch around a tenant backup.** Isolation was proven at the level of the dump itself; the `stancl/tenancy` connection swap that wraps it could not be exercised without writing a tenant into the live catalogue. If you run per-tenant backups, confirm one archive against one tenant's data before trusting the set.
 
 ---
 
