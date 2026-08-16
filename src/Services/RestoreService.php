@@ -33,6 +33,12 @@ class RestoreService
      *                          see wipeBackedUpPaths() for the exact scope erased
      *                          - 'source'          (string) — 'local' | 'remote' | 'ftp'; omit it to
      *                          read from the first destination the backup actually reached
+     *                          - 'database'        (string) — write to this database instead of the
+     *                          target's own, for this run only. Rehearsal: a restore nobody has ever
+     *                          run is a backup nobody has ever verified, and trying one used to mean
+     *                          repointing the whole application. Only the database name moves; the
+     *                          host, credentials and driver of the target connection are kept, and
+     *                          nothing outside this call is reconfigured.
      *                          - 'on_phase'        (callable) — receives (string $phase, array $context = []);
      *                          announces progress through downloading, verifying, unpacking and the
      *                          restore halves. Optional; a restore behaves exactly the same without it.
@@ -47,6 +53,7 @@ class RestoreService
         $restoreStorage = $options['restore_storage'] ?? false; // opt-in: dangerous
         $wipeStorage = $options['wipe_storage'] ?? false; // opt-in: replace instead of merge
         $destination = $options['source'] ?? null; // 'local' | 'remote' | 'ftp', null to auto-detect
+        $targetDatabase = $options['database'] ?? null; // null to write to the target's own database
         $onPhase = $options['on_phase'] ?? null;
 
         if ($record->isFailed() || $record->isRunning()) {
@@ -75,11 +82,11 @@ class RestoreService
             $components = $this->store->unBundle($bundlePath);
 
             if ($record->type === 'landlord') {
-                return $this->restoreLandlord($record, $components, $restoreDb, $restoreStorage, $wipeStorage, $onPhase);
+                return $this->restoreLandlord($record, $components, $restoreDb, $restoreStorage, $wipeStorage, $onPhase, $targetDatabase);
             }
 
             if ($record->type === 'tenant') {
-                return $this->restoreTenant($record, $components, $restoreDb, $restoreStorage, $wipeStorage, $onPhase);
+                return $this->restoreTenant($record, $components, $restoreDb, $restoreStorage, $wipeStorage, $onPhase, $targetDatabase);
             }
 
             if ($record->type === 'filesystem') {
@@ -152,14 +159,15 @@ class RestoreService
      * @param  bool  $db  Whether to restore the database
      * @param  bool  $fs  Whether to restore the filesystem
      * @param  bool  $wipe  Whether to erase the backed-up paths before extracting
+     * @param  string|null  $targetDatabase  Write to this database instead of the central one
      */
-    protected function restoreLandlord(BackupRecord $record, array $components, bool $db, bool $fs, bool $wipe = false, ?callable $onPhase = null): bool
+    protected function restoreLandlord(BackupRecord $record, array $components, bool $db, bool $fs, bool $wipe = false, ?callable $onPhase = null, ?string $targetDatabase = null): bool
     {
         if ($db && isset($components['database'])) {
             $this->announce($onPhase, 'restoring database');
 
             $driver = config('database.default');
-            $config = config("database.connections.{$driver}");
+            $config = $this->redirect(config("database.connections.{$driver}"), $targetDatabase);
 
             $this->preservingCatalogue(function () use ($driver, $config, $components) {
                 $this->db->restore($driver, $config, $components['database']);
@@ -175,6 +183,39 @@ class RestoreService
         }
 
         return true;
+    }
+
+    /**
+     * Point one restore at another database, for that restore only.
+     *
+     * The whole redirection is a single key on a copy of the connection
+     * configuration: the host, credentials, port and driver of the real target
+     * are kept, so a rehearsal exercises the same server and the same client
+     * binary as the restore it is rehearsing — only the database it writes into
+     * moves. Nothing is written back to config(), so the application, its other
+     * connections and any subsequent restore in the same process are untouched.
+     *
+     * A null override is not a redirection: the configuration comes back exactly
+     * as it was handed in, which is what every caller but the console gets.
+     *
+     * @param  array<string, mixed>  $config  The target's own connection configuration
+     * @param  string|null  $database  The database to write to instead, or null to keep the target's
+     * @return array<string, mixed>
+     */
+    protected function redirect(array $config, ?string $database): array
+    {
+        if ($database === null) {
+            return $config;
+        }
+
+        Log::warning('[Vanguard] Restore target redirected', [
+            'from' => $config['database'] ?? null,
+            'to' => $database,
+        ]);
+
+        $config['database'] = $database;
+
+        return $config;
     }
 
     /**
@@ -246,8 +287,9 @@ class RestoreService
      * @param  bool  $db  Whether to restore the database
      * @param  bool  $fs  Whether to restore the filesystem
      * @param  bool  $wipe  Whether to erase the backed-up paths before extracting
+     * @param  string|null  $targetDatabase  Write to this database instead of the tenant's own
      */
-    protected function restoreTenant(BackupRecord $record, array $components, bool $db, bool $fs, bool $wipe = false, ?callable $onPhase = null): bool
+    protected function restoreTenant(BackupRecord $record, array $components, bool $db, bool $fs, bool $wipe = false, ?callable $onPhase = null, ?string $targetDatabase = null): bool
     {
         $tenantModel = config('vanguard.tenancy.tenant_model', Tenant::class);
         $tenant = $tenantModel::findOrFail($record->tenant_id);
@@ -259,7 +301,7 @@ class RestoreService
                 $this->announce($onPhase, 'restoring database');
 
                 $resolver = app(TenancyResolver::class);
-                $dbConf = $resolver->tenantDbConfig();
+                $dbConf = $this->redirect($resolver->tenantDbConfig(), $targetDatabase);
                 $this->db->restore($dbConf['driver'], $dbConf, $components['database']);
                 Log::info('[Vanguard] Tenant DB restored', ['tenant' => $record->tenant_id]);
             }
