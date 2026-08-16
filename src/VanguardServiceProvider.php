@@ -19,6 +19,7 @@ use SoftArtisan\Vanguard\Commands\VanguardRestoreCommand;
 use SoftArtisan\Vanguard\Console\VanguardScheduler;
 use SoftArtisan\Vanguard\Events\BackupCompleted;
 use SoftArtisan\Vanguard\Events\BackupFailed;
+use SoftArtisan\Vanguard\Events\RestoreFailed;
 use SoftArtisan\Vanguard\Listeners\SendBackupOutcomeNotification;
 use SoftArtisan\Vanguard\Services\BackupManager;
 use SoftArtisan\Vanguard\Services\BackupStorageManager;
@@ -99,6 +100,7 @@ class VanguardServiceProvider extends ServiceProvider
     {
         Event::listen(BackupFailed::class, [SendBackupOutcomeNotification::class, 'handleFailure']);
         Event::listen(BackupCompleted::class, [SendBackupOutcomeNotification::class, 'handleSuccess']);
+        Event::listen(RestoreFailed::class, [SendBackupOutcomeNotification::class, 'handleRestoreFailure']);
     }
 
     /**

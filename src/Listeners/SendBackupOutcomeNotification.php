@@ -7,7 +7,10 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Notification;
 use SoftArtisan\Vanguard\Events\BackupCompleted;
 use SoftArtisan\Vanguard\Events\BackupFailed;
+use SoftArtisan\Vanguard\Events\RestoreFailed;
+use SoftArtisan\Vanguard\Models\RestoreRecord;
 use SoftArtisan\Vanguard\Notifications\BackupOutcomeNotification;
+use SoftArtisan\Vanguard\Notifications\RestoreOutcomeNotification;
 
 /**
  * Turns a backup outcome into the notifications config('vanguard.notifications')
@@ -83,6 +86,56 @@ class SendBackupOutcomeNotification
             Http::timeout(10)->post($webhook, ['text' => $text]);
         } catch (\Throwable $e) {
             Log::error('[Vanguard] Could not send the backup notification to Slack', [
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * A failed restore raises the same alarm as a failed backup.
+     */
+    public function handleRestoreFailure(RestoreFailed $event): void
+    {
+        if (! config('vanguard.notifications.on_failure', true)) {
+            return;
+        }
+
+        $to = config('vanguard.notifications.mail.to');
+
+        if (config('vanguard.notifications.mail.enabled', true) && ! empty($to)) {
+            try {
+                Notification::route('mail', $to)->notify(
+                    new RestoreOutcomeNotification($event->record, $event->exception->getMessage()),
+                );
+            } catch (\Throwable $e) {
+                Log::error('[Vanguard] Could not send the restore notification by mail', [
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        $this->slackForRestore($event->record, $event->exception->getMessage());
+    }
+
+    /**
+     * Post a failed restore to Slack when a webhook is configured.
+     */
+    protected function slackForRestore(RestoreRecord $record, string $error): void
+    {
+        $webhook = config('vanguard.notifications.slack.webhook_url');
+
+        if (! config('vanguard.notifications.slack.enabled', false) || empty($webhook)) {
+            return;
+        }
+
+        $target = $record->tenant_id !== null ? 'tenant '.$record->tenant_id : $record->type;
+
+        try {
+            Http::timeout(10)->post($webhook, [
+                'text' => sprintf(':rotating_light: Vanguard restore #%d (%s) failed: %s', $record->id, $target, $error),
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('[Vanguard] Could not send the restore notification to Slack', [
                 'error' => $e->getMessage(),
             ]);
         }
