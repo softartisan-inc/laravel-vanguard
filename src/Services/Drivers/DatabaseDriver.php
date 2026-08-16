@@ -503,18 +503,28 @@ class DatabaseDriver
      */
     protected function dumpPgsql(array $c, string $dest): void
     {
-        $cmd = sprintf(
-            '%s %s --format=plain --no-acl --no-owner -h %s -p %s -U %s %s 2>&1 | gzip > %s',
-            $this->pgPasswordEnv($c),
-            escapeshellcmd($this->resolveBinary('pg_dump')),
-            escapeshellarg($c['host'] ?? '127.0.0.1'),
-            escapeshellarg((string) ($c['port'] ?? 5432)),
-            escapeshellarg($c['username']),
-            escapeshellarg($c['database']),
-            escapeshellarg($dest),
-        );
+        // Started directly, not through a shell pipeline: piping into gzip
+        // meant the exit code checked was gzip's, so a pg_dump that died
+        // halfway still produced a "successful" archive — with its error
+        // message written inside it by 2>&1. Same defect the MySQL path had.
+        $command = [
+            $this->resolveBinary('pg_dump'),
+            '--format=plain',
+            '--no-acl',
+            '--no-owner',
+            '-h', (string) ($c['host'] ?? '127.0.0.1'),
+            '-p', (string) ($c['port'] ?? 5432),
+            '-U', (string) $c['username'],
+            (string) $c['database'],
+        ];
 
-        $this->exec($cmd, 'pg_dump');
+        $this->setPgPasswordEnv($c);
+
+        try {
+            $this->runProcessToGzip($command, $dest, 'pg_dump');
+        } finally {
+            $this->clearPgPasswordEnv();
+        }
     }
 
     /**
@@ -527,18 +537,27 @@ class DatabaseDriver
      */
     protected function restorePgsql(array $c, string $src): void
     {
-        $cmd = sprintf(
-            '%s gunzip -c %s | %s -h %s -p %s -U %s -d %s 2>&1',
-            $this->pgPasswordEnv($c),
-            escapeshellarg($src),
-            escapeshellcmd($this->resolveBinary('psql')),
-            escapeshellarg($c['host'] ?? '127.0.0.1'),
-            escapeshellarg((string) ($c['port'] ?? 5432)),
-            escapeshellarg($c['username']),
-            escapeshellarg($c['database']),
-        );
+        // The password goes into the process environment, not in front of the
+        // command: in `PGPASSWORD=x gunzip -c file | psql`, the shell gives the
+        // variable to gunzip only, so psql prompted for a password and the
+        // restore died with "password authentication failed".
+        $this->setPgPasswordEnv($c);
 
-        $this->exec($cmd, 'psql restore');
+        try {
+            $cmd = sprintf(
+                'gunzip -c %s | %s -h %s -p %s -U %s -d %s 2>&1',
+                escapeshellarg($src),
+                escapeshellcmd($this->resolveBinary('psql')),
+                escapeshellarg($c['host'] ?? '127.0.0.1'),
+                escapeshellarg((string) ($c['port'] ?? 5432)),
+                escapeshellarg($c['username']),
+                escapeshellarg($c['database']),
+            );
+
+            $this->exec($cmd, 'psql restore');
+        } finally {
+            $this->clearPgPasswordEnv();
+        }
     }
 
     /**
@@ -555,6 +574,31 @@ class DatabaseDriver
         return ! empty($c['password'])
             ? 'PGPASSWORD='.escapeshellarg($c['password'])
             : '';
+    }
+
+    /**
+     * Put PGPASSWORD in the process environment for a PostgreSQL command.
+     *
+     * Both pg_dump and psql read it from the environment they inherit, which
+     * is what makes it work across a pipeline and keeps the credential out of
+     * the process list.
+     */
+    protected function setPgPasswordEnv(array $c): void
+    {
+        if (! empty($c['password'])) {
+            putenv("PGPASSWORD={$c['password']}");
+        }
+    }
+
+    /**
+     * Remove PGPASSWORD from the process environment.
+     *
+     * Always called in a finally block so the credential does not persist
+     * across subsequent jobs in a long-running worker.
+     */
+    protected function clearPgPasswordEnv(): void
+    {
+        putenv('PGPASSWORD');
     }
 
     // ─── SQLite ───────────────────────────────────────────────────
