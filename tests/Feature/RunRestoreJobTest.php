@@ -135,4 +135,34 @@ class RunRestoreJobTest extends TestCase
 
         $this->assertTrue(true, 'a deleted restore row must not crash the worker');
     }
+
+    #[Test]
+    public function it_fails_the_row_when_the_targeted_backup_is_gone(): void
+    {
+        Event::fake([RestoreStarted::class, RestoreCompleted::class, RestoreFailed::class]);
+
+        $backup = $this->makeRecord();
+        $restore = $this->makeRestore(['backup_id' => $backup->id, 'status' => 'pending']);
+
+        // Delete the backup the restore targets. `backup_id` is nullOnDelete, and
+        // SQLite foreign keys are enforced for this suite, so the FK clears itself
+        // rather than blocking the delete — confirm that before trusting it.
+        $backup->delete();
+        $this->assertNull($restore->fresh()->backup_id, 'nullOnDelete should have cleared backup_id');
+
+        $service = Mockery::mock(RestoreService::class);
+        $service->shouldNotReceive('restore');
+
+        (new RunRestoreJob($restore->id))->handle($service);
+
+        $restore = $restore->fresh();
+
+        $this->assertSame('failed', $restore->status);
+        $this->assertStringContainsString('backup', $restore->error);
+        $this->assertStringContainsString('no longer exists', $restore->error);
+
+        Event::assertDispatched(RestoreFailed::class);
+        Event::assertNotDispatched(RestoreStarted::class);
+        Event::assertNotDispatched(RestoreCompleted::class);
+    }
 }
