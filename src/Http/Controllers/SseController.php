@@ -7,10 +7,21 @@ use Illuminate\Routing\Controller;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use SoftArtisan\Vanguard\Models\BackupRecord;
+use SoftArtisan\Vanguard\Models\RestoreRecord;
+use SoftArtisan\Vanguard\Vanguard;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class SseController extends Controller
 {
+    /**
+     * How many recent rows of each kind the fingerprint covers.
+     *
+     * Bounded so the poll stays cheap on an installation with years of
+     * history, and large enough that anything moving is inside it: a change
+     * to a row two hundred backups old is not news.
+     */
+    public const RECENT_ROWS = 200;
+
     /**
      * GET /vanguard/api/stream
      *
@@ -77,6 +88,10 @@ class SseController extends Controller
                     }
 
                     if ($current !== $lastSnapshot) {
+                        // 'backup.updated' also covers restores now. The name
+                        // is kept until phase 3 rebuilds the JS bundle that
+                        // reads it; renaming it here would ship a dashboard
+                        // that silently stops updating.
                         $this->sendEvent('vanguard', [
                             'type' => 'backup.updated',
                             'stats' => $this->quickStats(),
@@ -131,28 +146,61 @@ class SseController extends Controller
     }
 
     /**
-     * Lightweight DB snapshot — just counts per status.
-     * Cheap query, no full record fetch.
+     * A fingerprint of every recent row, backups and restores alike.
+     *
+     * The previous snapshot was a status→count map plus the latest id — a
+     * lossy aggregate, and proved blind on 16 August 2026: any set of
+     * transitions leaving both the multiset of statuses and the maximum id
+     * unchanged produced no event, which is the shape of --all-tenants with
+     * a single worker. It also never queried vanguard_restores at all, so
+     * every restore, and every phase of every restore, was invisible to the
+     * channel the restore screen is built on.
+     *
+     * Hashing id:status:updated_at over a bounded window is exact for any
+     * state change, catches creations and deletions, and reads only indexed
+     * columns.
      */
     protected function snapshot(): string
     {
-        $counts = BackupRecord::selectRaw('status, COUNT(*) as count')
-            ->groupBy('status')
-            ->pluck('count', 'status')
-            ->toArray();
+        // Pinned: vanguard_backups and vanguard_restores live on the central
+        // connection, and stancl/tenancy swaps the default one underneath.
+        $central = Vanguard::centralConnection();
 
-        // Also include the ID of the most recent record to catch new backups
-        $latest = BackupRecord::latest()->value('id');
+        $backups = BackupRecord::on($central)
+            ->orderByDesc('id')
+            ->limit(static::RECENT_ROWS)
+            ->get(['id', 'status', 'updated_at'])
+            ->map(fn ($r) => 'b'.$r->id.':'.$r->status.':'.$r->updated_at?->getTimestamp())
+            ->all();
 
-        return json_encode([$counts, $latest]);
+        // The phase is part of the fingerprint: a restore holds one status
+        // for minutes while moving through five phases, and a screen that
+        // does not move looks like a screen that has hung.
+        $restores = RestoreRecord::on($central)
+            ->orderByDesc('id')
+            ->limit(static::RECENT_ROWS)
+            ->get(['id', 'status', 'phase', 'updated_at'])
+            ->map(fn ($r) => 'r'.$r->id.':'.$r->status.':'.$r->phase.':'.$r->updated_at?->getTimestamp())
+            ->all();
+
+        return md5(implode('|', array_merge($backups, $restores)));
     }
 
+    /**
+     * @return array<string, int>
+     */
     protected function quickStats(): array
     {
+        $central = Vanguard::centralConnection();
+
         return [
-            'total_backups' => BackupRecord::count(),
-            'running_backups' => BackupRecord::running()->count(),
-            'failed_recent' => BackupRecord::failed()
+            'total_backups' => BackupRecord::on($central)->count(),
+            'running_backups' => BackupRecord::on($central)->running()->count(),
+            'failed_recent' => BackupRecord::on($central)->failed()
+                ->where('created_at', '>=', now()->subDay())
+                ->count(),
+            'running_restores' => RestoreRecord::on($central)->running()->count(),
+            'failed_restores_recent' => RestoreRecord::on($central)->failed()
                 ->where('created_at', '>=', now()->subDay())
                 ->count(),
         ];
