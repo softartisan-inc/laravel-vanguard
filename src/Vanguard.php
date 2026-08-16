@@ -100,6 +100,25 @@ class Vanguard
     }
 
     /**
+     * The connection Vanguard's own tables live on.
+     *
+     * stancl/tenancy swaps the default database connection for the duration
+     * of a tenancy window, and a vanguard_* query that lands in a tenant
+     * database finds no such table. Every read and write of vanguard_backups
+     * and vanguard_restores resolves its connection here.
+     *
+     * Never the literal 'central': on this product's production installs the
+     * central connection is the application's default one (mysql), and no
+     * connection named 'central' exists. `?:` rather than config()'s second
+     * argument, because a key that is present but null returns null, not the
+     * fallback.
+     */
+    public static function centralConnection(): string
+    {
+        return config('tenancy.database.central_connection') ?: config('database.default');
+    }
+
+    /**
      * Determine if the given request can access the Vanguard dashboard.
      *
      * Delegates to the $authUsing callback if set, otherwise falls back to
