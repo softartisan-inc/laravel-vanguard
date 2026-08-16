@@ -40,7 +40,12 @@ class BackupStorageManager
     protected function makeSessionTmpDir(): string
     {
         $base = config('vanguard.tmp_path', storage_path('vanguard-tmp'));
-        $dir = rtrim($base, '/').'/'.uniqid('vanguard_', true);
+
+        // Random rather than time-derived: this directory holds a plaintext
+        // database dump between the dump and the bundle. The mode is 0700, so
+        // a guessable name is not by itself a way in — but there is no reason
+        // to publish when the backup ran either.
+        $dir = rtrim($base, '/').'/vanguard_'.bin2hex(random_bytes(16));
 
         if (! mkdir($dir, 0700, true) && ! is_dir($dir)) {
             throw new RuntimeException("[Vanguard] Cannot create tmp directory: {$dir}");
@@ -137,9 +142,7 @@ class BackupStorageManager
         if (config('vanguard.destinations.remote.enabled', false)) {
             $remoteDisk = config('vanguard.destinations.remote.disk', 's3');
             $remotePath = config('vanguard.destinations.remote.path', 'vanguard-backups')."/{$name}.tar";
-            $stream = fopen($bundlePath, 'rb');
-            $ok = Storage::disk($remoteDisk)->put($remotePath, $stream);
-            fclose($stream);
+            $ok = $this->putStream($remoteDisk, $remotePath, $bundlePath);
             if (! $ok) {
                 throw new RuntimeException("[Vanguard] Failed to write backup to remote disk [{$remoteDisk}]: {$remotePath}");
             }
@@ -150,9 +153,7 @@ class BackupStorageManager
         if (config('vanguard.destinations.ftp.enabled', false)) {
             $ftpDisk = config('vanguard.destinations.ftp.disk', 'ftp');
             $ftpPath = config('vanguard.destinations.ftp.path', 'vanguard-backups')."/{$name}.tar";
-            $stream = fopen($bundlePath, 'rb');
-            $ok = Storage::disk($ftpDisk)->put($ftpPath, $stream);
-            fclose($stream);
+            $ok = $this->putStream($ftpDisk, $ftpPath, $bundlePath);
             if (! $ok) {
                 throw new RuntimeException("[Vanguard] Failed to write backup to FTP disk [{$ftpDisk}]: {$ftpPath}");
             }
@@ -203,9 +204,43 @@ class BackupStorageManager
         }
 
         // Fallback: stream copy — no full file in memory.
+        $this->putStream($disk, $storagePath, $sourcePath);
+    }
+
+    /**
+     * Stream a local file onto a Flysystem disk, closing the handle whatever
+     * happens.
+     *
+     * The handle used to be closed on the line after the upload — the one line
+     * that does not run when the upload throws. A Horizon worker running a
+     * backup an hour against a bucket that intermittently refuses writes leaks
+     * one descriptor per failure until it can no longer open a file at all.
+     *
+     * @param  string  $disk  Filesystem disk name
+     * @param  string  $storagePath  Destination path on that disk
+     * @param  string  $sourcePath  Absolute path of the local file to send
+     * @return bool Whether the disk accepted the write
+     *
+     * @throws RuntimeException If the local file cannot be opened
+     */
+    protected function putStream(string $disk, string $storagePath, string $sourcePath): bool
+    {
         $stream = fopen($sourcePath, 'rb');
-        Storage::disk($disk)->put($storagePath, $stream);
-        fclose($stream);
+
+        if ($stream === false) {
+            throw new RuntimeException("[Vanguard] Cannot read the archive to upload: {$sourcePath}");
+        }
+
+        try {
+            return Storage::disk($disk)->put($storagePath, $stream) !== false;
+        } finally {
+            // A Flysystem adapter may already have consumed and closed the
+            // stream; closing a spent handle twice is not an error worth
+            // raising over an upload that otherwise succeeded.
+            if (is_resource($stream)) {
+                fclose($stream);
+            }
+        }
     }
 
     // ─── Download for Restore ─────────────────────────────────────
@@ -235,9 +270,19 @@ class BackupStorageManager
 
         $readStream = Storage::disk($disk)->readStream($storedPath);
         $writeStream = fopen($tempFile, 'wb');
-        stream_copy_to_stream($readStream, $writeStream);
-        fclose($readStream);
-        fclose($writeStream);
+
+        try {
+            stream_copy_to_stream($readStream, $writeStream);
+        } finally {
+            // In a finally block for the same reason as the upload: a download
+            // interrupted half way through must cost the archive, not a file
+            // descriptor the worker never gets back.
+            foreach ([$readStream, $writeStream] as $handle) {
+                if (is_resource($handle)) {
+                    fclose($handle);
+                }
+            }
+        }
 
         return $tempFile;
     }

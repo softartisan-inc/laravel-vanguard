@@ -6,6 +6,8 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
+use SoftArtisan\Vanguard\Jobs\RunTenantBackupJob;
 use SoftArtisan\Vanguard\Models\BackupRecord;
 use SoftArtisan\Vanguard\Services\BackupManager;
 use SoftArtisan\Vanguard\Services\BackupStorageManager;
@@ -14,14 +16,9 @@ use SoftArtisan\Vanguard\Services\TenancyResolver;
 
 class BackupsApiController extends Controller
 {
-    /**
-     * @param  BackupManager        $manager
-     * @param  TenancyResolver      $tenancy
-     * @param  BackupStorageManager $store
-     */
     public function __construct(
-        protected BackupManager       $manager,
-        protected TenancyResolver     $tenancy,
+        protected BackupManager $manager,
+        protected TenancyResolver $tenancy,
         protected BackupStorageManager $store,
     ) {}
 
@@ -30,16 +27,14 @@ class BackupsApiController extends Controller
      *
      * Return aggregated dashboard statistics: tenant count, backup counts by
      * status, total storage used, and the ten most recent backup records.
-     *
-     * @return JsonResponse
      */
     public function stats(): JsonResponse
     {
-        $totalTenants   = $this->tenancy->isEnabled() ? $this->tenancy->allTenants()->count() : 0;
-        $totalBackups   = BackupRecord::count();
+        $totalTenants = $this->tenancy->isEnabled() ? $this->tenancy->allTenants()->count() : 0;
+        $totalBackups = BackupRecord::count();
         $runningBackups = BackupRecord::running()->count();
-        $failedBackups  = BackupRecord::failed()->where('created_at', '>=', now()->subDay())->count();
-        $totalSize      = BackupRecord::completed()->sum('file_size');
+        $failedBackups = BackupRecord::failed()->where('created_at', '>=', now()->subDay())->count();
+        $totalSize = BackupRecord::completed()->sum('file_size');
 
         $recentBackups = BackupRecord::latest()
             ->limit(10)
@@ -47,13 +42,13 @@ class BackupsApiController extends Controller
             ->map(fn ($r) => $this->formatRecord($r));
 
         return response()->json([
-            'total_tenants'    => $totalTenants,
-            'total_backups'    => $totalBackups,
-            'running_backups'  => $runningBackups,
-            'failed_recent'    => $failedBackups,
+            'total_tenants' => $totalTenants,
+            'total_backups' => $totalBackups,
+            'running_backups' => $runningBackups,
+            'failed_recent' => $failedBackups,
             'total_size_bytes' => $totalSize,
             'total_size_human' => $this->humanSize($totalSize),
-            'recent_backups'   => $recentBackups,
+            'recent_backups' => $recentBackups,
         ]);
     }
 
@@ -62,17 +57,14 @@ class BackupsApiController extends Controller
      *
      * Return a paginated list of backup records. Supports filtering by
      * tenant_id, status, and type. All filter parameters are validated.
-     *
-     * @param  Request  $request
-     * @return JsonResponse
      */
     public function index(Request $request): JsonResponse
     {
         $request->validate([
             'tenant_id' => 'nullable|string|max:255',
-            'status'    => 'nullable|in:pending,running,completed,failed',
-            'type'      => 'nullable|in:landlord,tenant,filesystem',
-            'per_page'  => 'nullable|integer|min:1|max:100',
+            'status' => 'nullable|in:pending,running,completed,failed',
+            'type' => 'nullable|in:landlord,tenant,filesystem',
+            'per_page' => 'nullable|integer|min:1|max:100',
         ]);
 
         $query = BackupRecord::latest();
@@ -92,12 +84,12 @@ class BackupsApiController extends Controller
         $records = $query->paginate($request->get('per_page', 20));
 
         return response()->json([
-            'data'  => collect($records->items())->map(fn ($r) => $this->formatRecord($r)),
-            'meta'  => [
+            'data' => collect($records->items())->map(fn ($r) => $this->formatRecord($r)),
+            'meta' => [
                 'current_page' => $records->currentPage(),
-                'last_page'    => $records->lastPage(),
-                'per_page'     => $records->perPage(),
-                'total'        => $records->total(),
+                'last_page' => $records->lastPage(),
+                'per_page' => $records->perPage(),
+                'total' => $records->total(),
             ],
         ]);
     }
@@ -107,8 +99,6 @@ class BackupsApiController extends Controller
      *
      * Return all tenants with their latest backup record and total backup count.
      * Returns an empty list when multi-tenancy is disabled.
-     *
-     * @return JsonResponse
      */
     public function tenants(): JsonResponse
     {
@@ -116,13 +106,37 @@ class BackupsApiController extends Controller
             return response()->json(['tenants' => []]);
         }
 
-        $tenants = $this->tenancy->allTenants()->map(function ($tenant) {
-            $latestBackup = BackupRecord::forTenant($tenant->getTenantKey())->latest()->first();
+        $all = $this->tenancy->allTenants();
+        $keys = $all->map(fn ($tenant) => (string) $tenant->getTenantKey())->all();
+
+        // One aggregation for every tenant, then one read of the rows it
+        // named. The loop used to run two queries per tenant, so the cost of
+        // the screen that says whether backups work grew with the customer
+        // list — MAX(id) stands in for "the latest" because ids are handed out
+        // in creation order and two records created in the same second have no
+        // other ordering to offer.
+        $stats = BackupRecord::query()
+            ->selectRaw('tenant_id, COUNT(*) as total, MAX(id) as latest_id')
+            ->whereIn('tenant_id', $keys)
+            ->groupBy('tenant_id')
+            ->get()
+            ->keyBy('tenant_id');
+
+        $latest = BackupRecord::query()
+            ->whereIn('id', $stats->pluck('latest_id')->all())
+            ->get()
+            ->keyBy('id');
+
+        $tenants = $all->map(function ($tenant) use ($stats, $latest) {
+            $key = (string) $tenant->getTenantKey();
+            $row = $stats->get($key);
+            $latestBackup = $row ? $latest->get($row->latest_id) : null;
+
             return [
-                'id'             => $tenant->getTenantKey(),
-                'schedule'       => $this->tenancy->tenantSchedule($tenant),
-                'latest_backup'  => $latestBackup ? $this->formatRecord($latestBackup) : null,
-                'total_backups'  => BackupRecord::forTenant($tenant->getTenantKey())->count(),
+                'id' => $key,
+                'schedule' => $this->tenancy->tenantSchedule($tenant),
+                'latest_backup' => $latestBackup ? $this->formatRecord($latestBackup) : null,
+                'total_backups' => (int) ($row->total ?? 0),
             ];
         });
 
@@ -136,12 +150,11 @@ class BackupsApiController extends Controller
      * When the queue is enabled, jobs are dispatched and the response indicates queuing.
      *
      * @param  Request  $request  Validated fields: type (required), tenant_id (required for 'tenant')
-     * @return JsonResponse
      */
     public function run(Request $request): JsonResponse
     {
         $request->validate([
-            'type'      => 'required|in:landlord,tenant,all-tenants,filesystem',
+            'type' => 'required|in:landlord,tenant,all-tenants,filesystem',
             'tenant_id' => 'required_if:type,tenant|nullable|string',
         ]);
 
@@ -149,40 +162,47 @@ class BackupsApiController extends Controller
             switch ($request->type) {
                 case 'landlord':
                     if (config('vanguard.queue.enabled', true)) {
-                        \SoftArtisan\Vanguard\Jobs\RunTenantBackupJob::dispatch('__landlord__', [])
+                        RunTenantBackupJob::dispatch('__landlord__', [])
                             ->onConnection(config('vanguard.queue.connection'))
                             ->onQueue(config('vanguard.queue.queue', 'vanguard'));
+
                         return response()->json(['message' => 'Landlord backup queued.', 'queued' => true]);
                     }
                     $record = $this->manager->backupLandlord();
+
                     return response()->json(['record' => $this->formatRecord($record)]);
 
                 case 'tenant':
                     $tenant = $this->tenancy->findTenant($request->tenant_id);
                     if (config('vanguard.queue.enabled', true)) {
-                        \SoftArtisan\Vanguard\Jobs\RunTenantBackupJob::dispatch($request->tenant_id)
+                        RunTenantBackupJob::dispatch($request->tenant_id)
                             ->onConnection(config('vanguard.queue.connection'))
                             ->onQueue(config('vanguard.queue.queue', 'vanguard'));
+
                         return response()->json(['message' => 'Tenant backup queued.', 'queued' => true]);
                     }
                     $record = $this->manager->backupTenant($tenant);
+
                     return response()->json(['record' => $this->formatRecord($record)]);
 
                 case 'all-tenants':
                     $results = $this->manager->backupAllTenants();
+
                     return response()->json(['results' => $results]);
 
                 case 'filesystem':
                     $record = $this->manager->backupFilesystem();
+
                     return response()->json(['record' => $this->formatRecord($record)]);
             }
         } catch (\Throwable $e) {
             Log::error('[Vanguard] Backup run failed', [
-                'type'      => $request->type,
+                'type' => $request->type,
                 'tenant_id' => $request->tenant_id,
-                'error'     => $e->getMessage(),
-                'trace'     => $e->getTraceAsString(),
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
             ]);
+
             return response()->json(['error' => 'Backup operation failed. Check server logs for details.'], 500);
         }
 
@@ -195,7 +215,6 @@ class BackupsApiController extends Controller
      * Delete a backup record and its associated files from local and remote disks.
      *
      * @param  int  $id  BackupRecord primary key
-     * @return JsonResponse
      */
     public function destroy(int $id): JsonResponse
     {
@@ -204,22 +223,23 @@ class BackupsApiController extends Controller
         try {
             if ($record->file_path) {
                 $disk = config('vanguard.destinations.local.disk', 'local');
-                \Illuminate\Support\Facades\Storage::disk($disk)->delete($record->file_path);
+                Storage::disk($disk)->delete($record->file_path);
             }
             if ($record->remote_path) {
                 $disk = config('vanguard.destinations.remote.disk', 's3');
-                \Illuminate\Support\Facades\Storage::disk($disk)->delete($record->remote_path);
+                Storage::disk($disk)->delete($record->remote_path);
             }
             if ($record->ftp_path) {
                 $disk = config('vanguard.destinations.ftp.disk', 'ftp');
-                \Illuminate\Support\Facades\Storage::disk($disk)->delete($record->ftp_path);
+                Storage::disk($disk)->delete($record->ftp_path);
             }
             $record->delete();
         } catch (\Throwable $e) {
             Log::error('[Vanguard] Backup deletion failed', [
                 'backup_id' => $id,
-                'error'     => $e->getMessage(),
+                'error' => $e->getMessage(),
             ]);
+
             return response()->json(['error' => 'Failed to delete backup. Check server logs for details.'], 500);
         }
 
@@ -231,11 +251,6 @@ class BackupsApiController extends Controller
      *
      * Restore a backup by its record ID. Accepts optional boolean flags to control
      * checksum verification, database restore, and filesystem restore.
-     *
-     * @param  int             $id
-     * @param  Request         $request
-     * @param  RestoreService  $restoreService
-     * @return JsonResponse
      */
     public function restore(int $id, Request $request, RestoreService $restoreService): JsonResponse
     {
@@ -244,20 +259,22 @@ class BackupsApiController extends Controller
         try {
             $restoreService->restore($record, [
                 'verify_checksum' => $request->boolean('verify_checksum', true),
-                'restore_db'      => $request->boolean('restore_db', true),
+                'restore_db' => $request->boolean('restore_db', true),
                 'restore_storage' => $request->boolean('restore_storage', false),
                 // No default: let the service pick the first destination the
                 // backup actually reached. Forcing 'local' broke restores on
                 // setups where only the remote copy exists.
-                'source'          => $request->input('source'),
+                'source' => $request->input('source'),
             ]);
+
             return response()->json(['message' => 'Restore completed successfully.']);
         } catch (\Throwable $e) {
             Log::error('[Vanguard] Restore failed', [
                 'backup_id' => $id,
-                'error'     => $e->getMessage(),
-                'trace'     => $e->getTraceAsString(),
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
             ]);
+
             return response()->json(['error' => 'Restore operation failed. Check server logs for details.'], 500);
         }
     }
@@ -267,43 +284,40 @@ class BackupsApiController extends Controller
     /**
      * Serialize a BackupRecord to an array suitable for JSON output.
      *
-     * @param  BackupRecord  $r
      * @return array<string, mixed>
      */
     protected function formatRecord(BackupRecord $r): array
     {
         return [
-            'id'            => $r->id,
-            'tenant_id'     => $r->tenant_id,
-            'type'          => $r->type,
-            'status'        => $r->status,
-            'file_size'     => $r->file_size,
+            'id' => $r->id,
+            'tenant_id' => $r->tenant_id,
+            'type' => $r->type,
+            'status' => $r->status,
+            'file_size' => $r->file_size,
             'file_size_human' => $r->file_size_human,
-            'duration'      => $r->duration,
-            'checksum'      => $r->checksum,
-            'destinations'  => $r->destinations,
-            'ftp_path'      => $r->ftp_path,
-            'error'         => $r->error,
-            'started_at'    => $r->started_at?->toIso8601String(),
-            'completed_at'  => $r->completed_at?->toIso8601String(),
-            'created_at'    => $r->created_at->toIso8601String(),
+            'duration' => $r->duration,
+            'checksum' => $r->checksum,
+            'destinations' => $r->destinations,
+            'ftp_path' => $r->ftp_path,
+            'error' => $r->error,
+            'started_at' => $r->started_at?->toIso8601String(),
+            'completed_at' => $r->completed_at?->toIso8601String(),
+            'created_at' => $r->created_at->toIso8601String(),
         ];
     }
 
     /**
      * Convert a byte count to a human-readable string (e.g. "4.2 MB").
-     *
-     * @param  int  $bytes
-     * @return string
      */
     protected function humanSize(int $bytes): string
     {
         $units = ['B', 'KB', 'MB', 'GB', 'TB'];
-        $unit  = 0;
+        $unit = 0;
         while ($bytes >= 1024 && $unit < count($units) - 1) {
             $bytes /= 1024;
             $unit++;
         }
+
         return round($bytes, 2).' '.$units[$unit];
     }
 }
