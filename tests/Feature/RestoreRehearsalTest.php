@@ -3,9 +3,12 @@
 namespace SoftArtisan\Vanguard\Tests\Feature;
 
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Schema;
 use Mockery;
 use PHPUnit\Framework\Attributes\Test;
+use SoftArtisan\Vanguard\Jobs\RunRestoreJob;
+use SoftArtisan\Vanguard\Models\RestoreRecord;
 use SoftArtisan\Vanguard\Services\BackupStorageManager;
 use SoftArtisan\Vanguard\Services\Drivers\DatabaseDriver;
 use SoftArtisan\Vanguard\Services\Drivers\StorageDriver;
@@ -15,6 +18,7 @@ use SoftArtisan\Vanguard\Tests\Support\FakeTenancyManager;
 use SoftArtisan\Vanguard\Tests\Support\FakeTenancyResolver;
 use SoftArtisan\Vanguard\Tests\Support\FakeTenant;
 use SoftArtisan\Vanguard\Tests\TestCase;
+use SoftArtisan\Vanguard\Vanguard;
 
 require_once __DIR__.'/../Support/tenancy_shim.php';
 
@@ -41,6 +45,7 @@ class RestoreRehearsalTest extends TestCase
     {
         parent::setUp();
         Event::fake();
+        Vanguard::auth(fn ($request) => true);
 
         Schema::create('vanguard_test_tenants', function ($table) {
             $table->string('id')->primary();
@@ -186,6 +191,90 @@ class RestoreRehearsalTest extends TestCase
         $this->assertNotSame($tenant->dbConfig()['database'], $captured['config']['database']);
     }
 
+    #[Test]
+    public function a_tenant_restore_redirects_the_tenants_own_connection_and_moves_nothing_else(): void
+    {
+        // The landlord path reads config('database.connections.<default>');
+        // the tenant path reads whatever tenancy()->initialize() installed for
+        // this tenant. It is the second one that has to be redirected — a
+        // rehearsal that redirected the landlord connection instead would write
+        // the tenant's data into a database on the wrong server, under the
+        // wrong credentials, and most likely succeed at it.
+        $tenant = $this->makeTenant('tenant-b');
+
+        $record = $this->makeRecord(['type' => 'tenant', 'tenant_id' => $tenant->getTenantKey(), 'checksum' => null]);
+
+        $captured = null;
+        $this->restoreService($captured)->restore($record, [
+            'verify_checksum' => false,
+            'database' => 'vanguard_rehearsal',
+        ]);
+
+        $expected = $tenant->dbConfig();
+        $expected['database'] = 'vanguard_rehearsal';
+
+        // Everything but the database name, byte for byte: the host, the port,
+        // the credentials, the driver and the tenant marker are the tenant's
+        // own, so the rehearsal exercises the same server and the same client
+        // as the restore it stands in for.
+        $this->assertSame($expected, $captured['config']);
+        $this->assertSame($tenant->dbConfig()['driver'], $captured['driver']);
+    }
+
+    #[Test]
+    public function a_tenant_restore_without_the_option_still_targets_the_tenants_own_database(): void
+    {
+        $tenant = $this->makeTenant('tenant-c');
+
+        $record = $this->makeRecord(['type' => 'tenant', 'tenant_id' => $tenant->getTenantKey(), 'checksum' => null]);
+
+        $captured = null;
+        $this->restoreService($captured)->restore($record, ['verify_checksum' => false]);
+
+        $this->assertSame($tenant->dbConfig(), $captured['config']);
+    }
+
+    #[Test]
+    public function redirecting_a_tenant_restore_leaves_the_tenant_connection_config_alone(): void
+    {
+        // Read from inside the restore, not after it: the tenancy window is
+        // the only moment the tenant connection exists, and it is closed by
+        // the time restore() returns. If the redirection were written back
+        // into config() rather than kept on a copy, everything else running
+        // inside that window — a model, a queued job, the next tenant in a
+        // backupAllTenants() loop — would silently start reading and writing
+        // the rehearsal database.
+        $tenant = $this->makeTenant('tenant-d');
+        $connection = config('tenancy.database.tenant_connection_name');
+
+        $record = $this->makeRecord(['type' => 'tenant', 'tenant_id' => $tenant->getTenantKey(), 'checksum' => null]);
+
+        $liveConfig = null;
+
+        $db = Mockery::mock(DatabaseDriver::class);
+        $db->shouldReceive('restore')->once()->andReturnUsing(
+            function () use (&$liveConfig, $connection) {
+                $liveConfig = config("database.connections.{$connection}");
+            }
+        );
+
+        $store = Mockery::mock(BackupStorageManager::class);
+        $store->shouldReceive('download')->once()->andReturn('/tmp/bundle.tar');
+        $store->shouldReceive('unBundle')->once()->andReturn(['database' => '/tmp/db.sql.gz']);
+        $store->shouldReceive('cleanTmp')->once();
+
+        (new RestoreService($db, Mockery::mock(StorageDriver::class), $store))->restore($record, [
+            'verify_checksum' => false,
+            'database' => 'vanguard_rehearsal',
+        ]);
+
+        $this->assertSame(
+            $tenant->dbConfig(),
+            $liveConfig,
+            'a rehearsal must not repoint the tenant connection it borrows',
+        );
+    }
+
     // ─────────────────────────────────────────────────────────────
     // The command carries it, refuses nonsense, and says where it writes
     // ─────────────────────────────────────────────────────────────
@@ -274,5 +363,68 @@ class RestoreRehearsalTest extends TestCase
         $this->artisan("vanguard:restore {$record->id} --database= --force")
             ->assertExitCode(1)
             ->expectsOutputToContain('--database must be a plain database identifier');
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Console only: the option must not exist anywhere else
+    // ─────────────────────────────────────────────────────────────
+
+    #[Test]
+    public function the_api_refuses_a_database_on_presence_alone(): void
+    {
+        // Same rule as wipe_storage, for the same reason. A dashboard user who
+        // believes they are rehearsing into a scratch database, and is silently
+        // given the real one, gets the worst possible outcome of this feature:
+        // production overwritten by a restore nobody thought was real. Refused
+        // on presence, not on value — being told the parameter is meaningless
+        // here is the only answer that cannot be misread.
+        Queue::fake();
+
+        $backup = $this->makeRecord(['type' => 'landlord', 'status' => 'completed', 'file_path' => 'path.tar']);
+
+        $this->postJson("/vanguard/api/backups/{$backup->id}/restore", [
+            'confirm' => 'landlord',
+            'database' => 'vanguard_rehearsal',
+        ])->assertStatus(400);
+
+        $this->assertSame(0, RestoreRecord::count(), 'a refused restore must leave no history row');
+        Queue::assertNothingPushed();
+    }
+
+    #[Test]
+    public function the_queued_restore_never_carries_a_database(): void
+    {
+        // The job builds the option array itself, from the columns of the
+        // history row. There is no column to carry a redirect and there must
+        // never be one: a redirected restore is something an operator does at
+        // a console, in front of the machine, not something that can be left
+        // sitting in a queue.
+        Queue::fake();
+
+        $backup = $this->makeRecord(['type' => 'landlord', 'status' => 'completed', 'file_path' => 'path.tar']);
+
+        $this->postJson("/vanguard/api/backups/{$backup->id}/restore", [
+            'confirm' => 'landlord',
+        ])->assertStatus(202);
+
+        $restore = RestoreRecord::firstOrFail();
+
+        $this->assertArrayNotHasKey('database', $restore->getAttributes());
+
+        $captured = null;
+
+        $service = Mockery::mock(RestoreService::class);
+        $service->shouldReceive('restore')->once()->andReturnUsing(
+            function ($record, $options) use (&$captured) {
+                $captured = $options;
+
+                return true;
+            }
+        );
+
+        (new RunRestoreJob($restore->id))->handle($service);
+
+        $this->assertIsArray($captured);
+        $this->assertArrayNotHasKey('database', $captured);
     }
 }

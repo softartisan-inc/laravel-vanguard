@@ -177,6 +177,7 @@ Vanguard::auth(fn (Request $r) => $r->user()?->isAdmin());
 ```bash
 php artisan vanguard:restore {id}
                   [--source=local|remote|ftp]
+                  [--database=name]
                   [--no-verify] [--no-db]
                   [--restore-storage] [--wipe-storage]
                   [--force]
@@ -185,11 +186,29 @@ php artisan vanguard:restore {id}
 | Option | Effect |
 |---|---|
 | `--source=` | Which destination the bundle is read back from. Omit it and Vanguard uses **the first destination that actually holds a path** (local, then remote, then ftp) — a backup that only ever reached S3 restores without any flag. Pass it explicitly to force one, e.g. to restore the remote copy while a local one exists. Asking for a destination the backup never reached is an error naming the ones available. |
+| `--database=` | Write to this database instead of the target's own, **for this run only** — see below |
 | `--no-verify` | Skip the SHA-256 checksum check |
 | `--no-db` | Restore the filesystem only |
 | `--restore-storage` | Also restore the filesystem (opt-in; the database alone is restored by default) |
 | `--wipe-storage` | Replace instead of merge — see below. Requires `--restore-storage` |
 | `--force` | Skip every confirmation prompt |
+
+### Rehearsing a restore (`--database=`)
+
+A backup nobody has ever restored is a backup nobody has verified. `--database=` lets you find out without repointing the application: the restore runs against the target's own server, with its own credentials and its own client binary — only the database it writes into moves.
+
+```bash
+# Landlord backup, replayed into a scratch database
+php artisan vanguard:restore 42 --database=vanguard_rehearsal
+
+# Same for a tenant backup: the tenant's connection is what gets redirected,
+# so the dump lands on the tenant's own server under the tenant's own user
+php artisan vanguard:restore 43 --database=vanguard_rehearsal
+```
+
+Create the database first — Vanguard writes into it, it does not create it. The name must be a plain identifier (letters, digits, `_`, `.`, `-`); anything else is refused rather than quoted, because the value reaches a command line. Nothing is written back to your configuration: the application, its other connections and any later restore in the same process are untouched. The command says which database it is about to write to, on its own line, before it asks to proceed.
+
+> `--database=` is CLI-only, like `--wipe-storage`. The dashboard API refuses the parameter outright rather than ignoring it: a rehearsal you believe is going to a scratch database and silently goes to the real one is the worst thing this option could do.
 
 ### Merge (default) vs. replace (`--wipe-storage`)
 
@@ -211,7 +230,7 @@ php artisan vanguard:restore 42 --restore-storage
 php artisan vanguard:restore 42 --restore-storage --wipe-storage
 ```
 
-> `--wipe-storage` is CLI-only on purpose. The dashboard API (`POST /api/backups/{id}/restore`) accepts `verify_checksum`, `restore_db`, `restore_storage` and `source`, but never wipes.
+> `--wipe-storage` is CLI-only on purpose. The dashboard API (`POST /api/backups/{id}/restore`) accepts `verify_checksum`, `restore_db`, `restore_storage` and `source` — and answers 400 for `wipe_storage` or `database`, on presence alone.
 
 ---
 

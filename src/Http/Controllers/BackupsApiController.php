@@ -414,6 +414,19 @@ class BackupsApiController extends Controller
             ], 400);
         }
 
+        // Same rule, same reason. Redirecting a restore into a throwaway
+        // database is a rehearsal an operator performs in front of the machine;
+        // accepting the parameter here and quietly ignoring it would let a
+        // caller believe they were writing to a scratch database while the
+        // restore overwrote the real one — the worst outcome this option has,
+        // and precisely what the console shouts about before it proceeds.
+        if ($request->has('database')) {
+            return response()->json([
+                'error' => 'Redirecting a restore to another database is not available from the API. Run '
+                    .'php artisan vanguard:restore '.$id.' --database=<name> on the server.',
+            ], 400);
+        }
+
         $request->validate([
             'source' => 'nullable|in:local,remote,ftp',
             'restore_db' => 'nullable|boolean',

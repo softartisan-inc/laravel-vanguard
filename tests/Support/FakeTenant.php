@@ -46,6 +46,14 @@ class FakeTenant extends Model
     {
         return [
             'driver' => 'sqlite',
+            // Host and credentials are part of the shape on purpose: a restore
+            // redirected to another database must keep reaching the same
+            // server, as the same user, or the rehearsal proves nothing about
+            // the restore it rehearses.
+            'host' => 'db.tenant.internal',
+            'port' => 3307,
+            'username' => 'tenant_user',
+            'password' => 'tenant-secret',
             'database' => (string) $this->db_database,
             'vanguard_test_marker' => $this->getTenantKey(),
         ];

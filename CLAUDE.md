@@ -89,9 +89,9 @@ The Blade view is a minimal shell that mounts Vue and passes config via `data-*`
 ### Artisan Commands
 - `vanguard:install` — publishes config and migrations
 - `vanguard:backup` — run a backup manually
-- `vanguard:restore {id}` — restore from a backup. Options: `--source=local|remote|ftp`, `--no-verify`, `--no-db`, `--restore-storage`, `--wipe-storage` (errors out without `--restore-storage`; asks a second confirmation naming the directories to erase), `--force`
+- `vanguard:restore {id}` — restore from a backup. Options: `--source=local|remote|ftp`, `--database=` (rehearsal: redirects only the `database` key of the target's own connection — the landlord's or, for a tenant backup, the tenant's — for that run; allowlisted identifier), `--no-verify`, `--no-db`, `--restore-storage`, `--wipe-storage` (errors out without `--restore-storage`; asks a second confirmation naming the directories to erase), `--force`
 - `vanguard:list` — list backup records
 - `vanguard:prune` — delete backups past retention period
 - `vanguard:cleanup-tmp` — remove orphaned tmp directories left by crashed workers
 
-The HTTP API (`POST /api/backups/{id}/restore`) exposes `verify_checksum`, `restore_db`, `restore_storage`, `source` — **not** `wipe_storage`, which stays CLI-only.
+The HTTP API (`POST /api/backups/{id}/restore`) exposes `verify_checksum`, `restore_db`, `restore_storage`, `source` — **not** `wipe_storage` nor `database`, which stay CLI-only and are refused with a 400 on presence alone.
