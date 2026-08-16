@@ -7,6 +7,75 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
+## [2.3.0] — 2026-08-16
+
+The dashboard stops being a screen that describes the configuration and starts
+being one that reports what actually happened. Restores are queued, recorded
+and alarmed like backups; the health screen answers "is it working" with
+evidence rather than settings; and every destructive action leaves a trace
+naming who asked for it.
+
+**Read this before upgrading.** The restore endpoint's contract changed in a
+way that breaks any client written against 2.2.0, dashboard-triggered tenant
+backups quietly got bigger, and a new archiving guard can drop a symlinked
+`filesystem_paths` entry. All three are spelled out below.
+
+### Changed
+- **BREAKING — the restore endpoint.** `POST /vanguard/api/backups/{id}/restore` now:
+  - **requires `confirm`**, a string repeating the target's name exactly — the tenant id, or `landlord` / `filesystem` for the untenanted targets. Anything else is refused with `400`. This is an API rule, not an interface courtesy: a curl call is refused the same way the dashboard's disabled button refuses a click, because a restore overwrites a live database and a `--days` typo really did erase seventeen backups during the 16 August tests.
+  - **answers `202` with `{"restore_id": N, "status": "pending"}`** instead of `200` with a result. Nothing has been restored when the call returns; the work runs on a worker and the row is where the outcome lives.
+  - **answers `400` for a backup that is not `completed`**, rather than attempting it. One convention for every business refusal: `400` for a rejection on the merits, `422` for a request whose shape is wrong.
+  - **refuses `wipe_storage` on presence alone**, whatever its value. Replace mode does not destroy what the backup contains — it destroys what the backup does *not* contain, with no way back — and stays a console decision. A caller sending `wipe_storage=false` is told the parameter has no meaning here rather than silently obeyed.
+  - **has no synchronous path left.** The old one ran a multi-minute operation inside the request, lost its answer to the first proxy timeout while the server carried on regardless, wrote no history, and hid the exact error behind "check server logs". Keeping both would have left two ways to restore with two different levels of observability — the mistake this release exists to remove.
+- **Dashboard-triggered *tenant* backups now include the filesystem by default.** This is the one behaviour change with no visible cause, so it is called out rather than buried: `run()` used to dispatch `[]`, and `BackupManager::backupTenant()` defaults `include_filesystem` to `false`, so the dashboard produced database-only tenant archives. It now sends `include_filesystem => true` unless told otherwise, which is correct parity with `vanguard:backup --tenant=` (where the filesystem is included unless `--no-filesystem` is passed) — but it can turn a 200 MB tenant archive into a multi-gigabyte one overnight. Pass `"include_filesystem": false` to get the old shape.
+- **Check your symlinked storage paths after upgrading.** The new archiving guard resolves each `filesystem_paths` entry through `realpath()` and refuses anything landing outside `storage_path()`. That is deliberate — the read side had no guard at all while the destructive side did — but it means an entry that is a *symlink pointing out* of `storage_path()` (a `storage/app/public` aimed at a shared volume, a common Docker layout) is now dropped from the archive rather than followed. The boot-time validator inspects the configured string and cannot see through a symlink, so nothing will warn you: confirm your archives still contain those trees.
+- The health endpoint has its own rate limiter, `vanguard.health`, reading the new `rate_limits.health` key (`VANGUARD_RATE_LIMIT_HEALTH`, 12/min). It shared the 5/min `vanguard.run` bucket, and a named limiter is keyed by name and user rather than by route — so five loads of the landing page `429`'d the backup trigger, the download, and the health page itself.
+
+### Added
+- **A health endpoint, `GET /vanguard/api/health`** — the screen that answers "is it actually working" from evidence rather than configuration, which is what the old dashboard answered from, wrongly, for five months in 2026. A destination is writable because a fourteen-byte witness object was just written to it, read back and deleted; a cron is alive because it left a stamp; a target is fresh because a backup of it completed. Alert channels report `set` / `absent` and never the value — a Slack webhook URL is a credential, and this payload reaches a browser. Every section is guarded on its own, so one broken part degrades to `null` with a reason instead of emptying the page.
+- **A restore history, `GET /vanguard/api/restores` and `/restores/{id}`** — what each restore targeted, which copy it read, with which options, who asked, its live phase, and on failure the exact error the HTTP layer refuses to disclose.
+- **`POST /vanguard/api/prune` and `POST /vanguard/api/cleanup-tmp`** — parity with `vanguard:prune` and `vanguard:cleanup-tmp`, including `days=0` read on presence rather than truthiness. Both sit behind the same typed confirmation as a restore.
+- **`GET /vanguard/api/backups/{id}/download`** streams the archive from whichever destination actually holds it, ordered local → remote → ftp with no default of `local`: on the recommended production setup local is disabled and only the remote copy exists. Streamed, never loaded — a landlord archive is gigabytes.
+- **Every destructive action is traced.** Restore, prune, delete and download all log at *warning* level, naming the actor and the target: an audit trail a production `LOG_LEVEL` silently discards is not an audit trail. Download is included because it takes every tenant's database, personal data and all, off the server.
+- **The scheduler proves it is running.** Nothing in an installation could tell a live cron from a dead one; in March 2026 this product showed a flawless configuration and backed up nothing for five months. Every scheduled Vanguard command now stamps a heartbeat *in the scheduler process, before* the background task is spawned — it is the scheduler running that is being proved, not the command succeeding — and the health screen reports `alive` only if the stamp is newer than twice the backup interval.
+- The dashboard can now choose the backup source and force the queue: `include_filesystem` (i.e. `--no-filesystem`) and `queue` (i.e. `--queue`) reach the API, which used to drop both on the floor.
+- The restore dialog in the shipped bundle asks the operator to type the target's name back and stays inert until it matches, mirroring the server rule instead of discovering it through a `400`. Its toast reports a *queued* restore and names the `restore_id`.
+
+### Fixed
+- **The SSE change detector was blind to whole classes of change.** It hashed a status→count map plus the maximum id — a lossy aggregate. Any set of transitions leaving both the multiset of statuses and the highest id unchanged produced no event, which is exactly the shape of `--all-tenants` on a single worker; and it never read `vanguard_restores` at all, so every restore and every phase of every restore was invisible to the channel the restore screen is built on. The fingerprint is now a hash of `id:status:updated_at` over a bounded window of both tables: exact for any state change, and it catches creations and deletions. The event is still named **`backup.updated`** and now fires for restores too — renaming it would ship a dashboard that silently stops updating, so the name waits for phase 3 to rebuild the bundle that reads it.
+- **A refused local write was recorded as a destination the backup reached.** `persistToLocalDisk()` returned void and dropped the stream fallback's `false`, so `local_path` was set unconditionally. The fallback is the cross-filesystem case — tmp on tmpfs, storage on a mounted volume, the normal Docker layout — and the record then claimed a copy that did not exist, which a later download or restore answered `404` on. It now raises the way the remote and FTP destinations always have.
+- **A filesystem backup turned the landlord freshness row green.** Both carry a null `tenant_id`, so selecting on that alone let a manually triggered filesystem run satisfy the only indicator on the health screen that turns red on its own — while the central database had not been dumped in weeks. The landlord row is constrained to `type = 'landlord'`.
+- **A cache outage `500`'d the health page.** The heartbeat read sat outside its `try` while every other section was guarded. On this product the cache is Redis, and a Redis outage is precisely when someone loads the page that reports breakage.
+- **`/api/health` ran one query per tenant.** Two hundred tenants was two hundred reads per load of the landing page. It is one grouped `MAX(completed_at)` for the whole tenant list plus the landlord row: two queries, whatever the customer list looks like.
+- **Vanguard's own tables are read through `Vanguard::centralConnection()` everywhere.** Seven sites still resolved the connection themselves — the stats, listing, tenants and delete endpoints, `pruneOldBackups()`, and both sites in `RunRestoreJob`. The job was the worst: it used `config('tenancy.database.central_connection', config('database.default'))`, which answers `null` for a key that is present but null, and `RestoreRecord::on(null)` then re-resolved `database.default` *at query time* — from inside the tenancy window, the one place the connection swap is guaranteed active. Restore phases were written to the tenant database, aborting the restore.
+- **The health endpoint no longer dies with the central database.** Each section degrades on its own, so an unreachable catalogue still leaves the destination probes, the schedule and the queue readable — that outage is the one this page exists to surface.
+- `GET /api/backups/{id}/download?source=bogus` answers `422` even without an `Accept: application/json` header. `validate()` only answers `422` for JSON callers, and a direct browser navigation to a download link — this endpoint's normal invocation, not an edge case — was redirected instead of told the value was bad.
+
+### Fixed — hardening ported from the March stash
+Five fixes written in March 2026 and never merged. They had had no independent
+review until this release.
+
+- **A tenant key could be injected into a scheduled command line.** The scheduler interpolates the key into a string it hands to a shell. A key is now refused unless it is a plain identifier — an allowlist rather than escaping, because a tenant key carrying a space, a newline or a shell metacharacter has no business on a command line, and quoting it would only hide how odd it is.
+- **A backup record could be given a final status without ever having run.** Only a `running` record may be marked completed or failed, so a stray callback cannot resurrect a record into a state that never happened.
+- **A `filesystem_paths` entry could escape `storage_path()` when archiving.** A stray `..` or an empty string named the server directory itself and the archive quietly became everything on the machine. The read side had no guard while the destructive side did; see the symlink note under **Changed** for the cost of this one.
+- **One database blip tore down every open dashboard.** The SSE poll reconnects inside its loop, so a database restarted between two polls raised out of the streamed response and every connected client lost its stream at once — over an interruption worth a single cycle. A failed poll is now a log line and a heartbeat.
+- **Leaked file descriptors, an unbounded listing, and a query per tenant.** Upload and download handles are closed in `finally` blocks (a Horizon worker running a backup an hour leaked one per failure until it could not open a file at all), `vanguard:list` is bounded, and `/api/tenants` reads the whole screen in a fixed number of queries instead of two per tenant.
+
+### Deliberately not included
+- **`--wipe-storage` has no endpoint.** Replace mode destroys what the backup does not contain, and no confirmation typed into a browser is worth that. It stays a console decision, taken by someone logged into the server, and `RunRestoreJob` hardcodes `wipe_storage => false` so no queued path can reach it either.
+- **`vanguard:install` has no endpoint.** It publishes config, runs migrations and inspects the host system; exposing it over HTTP would mean a dashboard that can rewrite its own installation. Its config-drift report is a thing to read on a terminal during an upgrade, not a button.
+
+### What the tests do not prove
+The suite is green against SQLite, fakes and a synchronous queue. Three of this
+release's central claims cannot be established that way, and are yours to check
+on your own installation:
+
+- **The write probe against a real bucket.** `Storage::fake()` accepts every write. The exact failure this endpoint exists to catch — a bucket that accepts a configuration, a listing and a HEAD while refusing every PUT — is the one a fake cannot reproduce. Load `/api/health` against your real destinations and confirm `writable: true` is being *earned*.
+- **The queue depth against a real driver.** The tests run `sync`, whose size is always 0. Whether `queue.pending` reports a real Redis backlog, and whether it degrades to `null` with a reason when Redis is down rather than reporting a reassuring 0, is unverified here.
+- **The scheduler stamp crossing processes.** The heartbeat is written by `schedule:run` in one process and read by a web request in another. The tests write and read it in the same process, with the same cache store. Confirm `schedule.alive` goes true on your installation after the cron has run once, and that it goes false again if you stop it.
+
+---
+
 ## [2.2.0] — 2026-08-16
 
 Restores get what backups already had: a record of what happened, and an alarm
