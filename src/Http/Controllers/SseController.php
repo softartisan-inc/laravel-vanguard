@@ -57,10 +57,18 @@ class SseController extends Controller
             $started = time();
             $lastSnapshot = $this->snapshot();
 
+            // The connection released here — and reconnected/disconnected in
+            // pollSnapshot() and the finally block below — must be the one
+            // snapshot() and quickStats() actually read: Vanguard's central
+            // connection, pinned because stancl/tenancy swaps the default
+            // connection underneath. Disconnecting the default here would
+            // leave the central connection open for the whole max_lifetime.
+            $connection = Vanguard::centralConnection();
+
             // Release the DB connection immediately after the first snapshot so
             // the connection slot is not held open during the sleep periods.
             // A fresh connection is acquired only when the next poll runs.
-            DB::connection()->disconnect();
+            DB::connection($connection)->disconnect();
 
             try {
                 while (true) {
@@ -105,7 +113,7 @@ class SseController extends Controller
             } finally {
                 // Restore the connection for any cleanup Laravel may perform after
                 // the response — guaranteed even if an exception interrupts the loop.
-                DB::connection()->reconnect();
+                DB::connection($connection)->reconnect();
             }
         }, 200, $this->sseHeaders());
     }
@@ -126,13 +134,20 @@ class SseController extends Controller
      */
     protected function pollSnapshot(): ?string
     {
+        // Must match the connection snapshot() and quickStats() read
+        // through — Vanguard's pinned central connection, not the default
+        // one stancl/tenancy may have swapped — or this reconnect/disconnect
+        // pair manages a connection nobody queries, and the one that is
+        // queried is never released between polls.
+        $connection = Vanguard::centralConnection();
+
         try {
-            DB::connection()->reconnect();
+            DB::connection($connection)->reconnect();
 
             try {
                 return $this->snapshot();
             } finally {
-                DB::connection()->disconnect();
+                DB::connection($connection)->disconnect();
             }
         } catch (\Throwable $e) {
             // Logged rather than swallowed: a database answering one poll in
