@@ -7,15 +7,20 @@ use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
+use SoftArtisan\Vanguard\Http\Concerns\GuardsDestructiveActions;
+use SoftArtisan\Vanguard\Jobs\RunRestoreJob;
 use SoftArtisan\Vanguard\Jobs\RunTenantBackupJob;
 use SoftArtisan\Vanguard\Models\BackupRecord;
+use SoftArtisan\Vanguard\Models\RestoreRecord;
 use SoftArtisan\Vanguard\Services\BackupManager;
 use SoftArtisan\Vanguard\Services\BackupStorageManager;
-use SoftArtisan\Vanguard\Services\RestoreService;
 use SoftArtisan\Vanguard\Services\TenancyResolver;
+use SoftArtisan\Vanguard\Vanguard;
 
 class BackupsApiController extends Controller
 {
+    use GuardsDestructiveActions;
+
     public function __construct(
         protected BackupManager $manager,
         protected TenancyResolver $tenancy,
@@ -249,34 +254,100 @@ class BackupsApiController extends Controller
     /**
      * POST /vanguard/api/backups/{id}/restore
      *
-     * Restore a backup by its record ID. Accepts optional boolean flags to control
-     * checksum verification, database restore, and filesystem restore.
+     * Create a history row and queue the restore, answering 202 with its id.
+     *
+     * This replaces the synchronous implementation outright. That one ran a
+     * multi-minute operation inside the request, lost its answer to any proxy
+     * timeout while the server carried on, wrote no history, and hid the exact
+     * error behind "check server logs". Keeping both paths would have left two
+     * ways to restore with two different levels of observability — the exact
+     * mistake this phase exists to remove.
+     *
+     * @return JsonResponse 202 with the restore id, or 400 / 404 on refusal
      */
-    public function restore(int $id, Request $request, RestoreService $restoreService): JsonResponse
+    public function restore(int $id, Request $request): JsonResponse
     {
-        $record = BackupRecord::findOrFail($id);
-
-        try {
-            $restoreService->restore($record, [
-                'verify_checksum' => $request->boolean('verify_checksum', true),
-                'restore_db' => $request->boolean('restore_db', true),
-                'restore_storage' => $request->boolean('restore_storage', false),
-                // No default: let the service pick the first destination the
-                // backup actually reached. Forcing 'local' broke restores on
-                // setups where only the remote copy exists.
-                'source' => $request->input('source'),
-            ]);
-
-            return response()->json(['message' => 'Restore completed successfully.']);
-        } catch (\Throwable $e) {
-            Log::error('[Vanguard] Restore failed', [
-                'backup_id' => $id,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
-
-            return response()->json(['error' => 'Restore operation failed. Check server logs for details.'], 500);
+        // Checked first, and on presence rather than value. Replace mode does
+        // not destroy what the backup contains — it destroys what the backup
+        // does not contain, with no way back — and stays a console decision
+        // (spec §2, §7). A caller sending wipe_storage=false is told the
+        // parameter has no meaning here rather than silently obeyed.
+        if ($request->has('wipe_storage')) {
+            return response()->json([
+                'error' => 'Replace mode is not available from the API. Run '
+                    .'php artisan vanguard:restore '.$id.' --restore-storage --wipe-storage on the server.',
+            ], 400);
         }
+
+        $request->validate([
+            'source' => 'nullable|in:local,remote,ftp',
+            'restore_db' => 'nullable|boolean',
+            'restore_storage' => 'nullable|boolean',
+            'verify_checksum' => 'nullable|boolean',
+        ]);
+
+        $central = Vanguard::centralConnection();
+
+        $record = BackupRecord::on($central)->find($id);
+
+        if ($record === null) {
+            return response()->json(['error' => "Backup #{$id} not found."], 404);
+        }
+
+        // What the operator has to type back: the tenant they are about to
+        // overwrite, or 'landlord' / 'filesystem' for the untenanted targets.
+        $target = $record->tenant_id ?? $record->type;
+
+        if ($rejection = $this->rejectUnlessConfirmed($request, $target)) {
+            return $rejection;
+        }
+
+        // 400 rather than 409: one convention for every business refusal.
+        if (! $record->isCompleted()) {
+            return response()->json([
+                'error' => "Backup #{$record->id} is [{$record->status}] and cannot be restored.",
+            ], 400);
+        }
+
+        $restore = RestoreRecord::on($central)->create([
+            'backup_id' => $record->id,
+            // Copied, not looked up: the history has to survive the deletion
+            // of the backup it restored.
+            'type' => $record->type,
+            'tenant_id' => $record->tenant_id,
+            'backup_created_at' => $record->created_at,
+            // No default: the service picks the first destination the backup
+            // actually reached. Forcing 'local' broke restores on the
+            // recommended production setup, where only the remote copy exists.
+            'source' => $request->input('source'),
+            'restore_db' => $request->boolean('restore_db', true),
+            'restore_storage' => $request->boolean('restore_storage', false),
+            'verify_checksum' => $request->boolean('verify_checksum', true),
+            'status' => 'pending',
+            'requested_by' => Vanguard::actor(),
+        ]);
+
+        $this->trace('restore requested', $target, [
+            'restore_id' => $restore->id,
+            'backup_id' => $record->id,
+            'source' => $restore->source,
+            'restore_db' => $restore->restore_db,
+            'restore_storage' => $restore->restore_storage,
+        ]);
+
+        // Dispatched unconditionally, even when vanguard.queue.enabled is
+        // false. A restore that never starts for want of a worker stays
+        // visible as a pending row the health screen counts, which is a far
+        // better failure than a request that blocks for seven minutes
+        // (spec §12).
+        RunRestoreJob::dispatch($restore->id)
+            ->onConnection(config('vanguard.queue.connection'))
+            ->onQueue(config('vanguard.queue.queue', 'vanguard'));
+
+        return response()->json([
+            'restore_id' => $restore->id,
+            'status' => 'pending',
+        ], 202);
     }
 
     // ─── Helpers ──────────────────────────────────────────────────

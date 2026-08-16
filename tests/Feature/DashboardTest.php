@@ -2,7 +2,6 @@
 
 namespace SoftArtisan\Vanguard\Tests\Feature;
 
-use Illuminate\Support\Facades\Event;
 use Mockery;
 use PHPUnit\Framework\Attributes\Test;
 use SoftArtisan\Vanguard\Models\BackupRecord;
@@ -281,41 +280,7 @@ class DashboardTest extends TestCase
             ->assertStatus(404);
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // POST /vanguard/api/backups/{id}/restore
-    // ─────────────────────────────────────────────────────────────
-
-    #[Test]
-    public function restore_endpoint_calls_restore_service(): void
-    {
-        $record = $this->makeRecord(['type' => 'landlord', 'file_path' => 'path.tar']);
-
-        $restoreService = Mockery::mock(\SoftArtisan\Vanguard\Services\RestoreService::class);
-        $restoreService->shouldReceive('restore')
-            ->once()
-            ->andReturn(true);
-
-        $this->app->instance(\SoftArtisan\Vanguard\Services\RestoreService::class, $restoreService);
-
-        $this->postJson("/vanguard/api/backups/{$record->id}/restore")
-            ->assertOk()
-            ->assertJsonStructure(['message']);
-    }
-
-    #[Test]
-    public function restore_endpoint_returns_500_on_error(): void
-    {
-        $record = $this->makeRecord(['type' => 'landlord', 'file_path' => 'path.tar']);
-
-        $restoreService = Mockery::mock(\SoftArtisan\Vanguard\Services\RestoreService::class);
-        $restoreService->shouldReceive('restore')
-            ->once()
-            ->andThrow(new \RuntimeException('Checksum mismatch'));
-
-        $this->app->instance(\SoftArtisan\Vanguard\Services\RestoreService::class, $restoreService);
-
-        $this->postJson("/vanguard/api/backups/{$record->id}/restore")
-            ->assertStatus(500)
-            ->assertJson(['error' => 'Restore operation failed. Check server logs for details.']);
-    }
+    // POST /vanguard/api/backups/{id}/restore is queued now, not run inline
+    // from this controller — see RestoreEndpointTest for its coverage
+    // (202/pending, confirmation, history row, dispatched job).
 }
