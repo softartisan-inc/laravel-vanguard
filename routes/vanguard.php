@@ -4,6 +4,7 @@ use Illuminate\Support\Facades\Route;
 use SoftArtisan\Vanguard\Http\Controllers\AssetsController;
 use SoftArtisan\Vanguard\Http\Controllers\BackupsApiController;
 use SoftArtisan\Vanguard\Http\Controllers\DashboardController;
+use SoftArtisan\Vanguard\Http\Controllers\MaintenanceApiController;
 use SoftArtisan\Vanguard\Http\Controllers\RestoresApiController;
 use SoftArtisan\Vanguard\Http\Controllers\SseController;
 use SoftArtisan\Vanguard\Http\Middleware\VanguardAuthenticate;
@@ -39,6 +40,17 @@ Route::middleware([VanguardAuthenticate::class])->group(function () {
         Route::post('/backups/{id}/restore', [BackupsApiController::class, 'restore'])
             ->middleware('throttle:vanguard.restore')
             ->name('backups.restore');
+
+        // Maintenance — prune is as irreversible as a restore, so it shares the
+        // strictest limiter. The tmp sweep only touches scratch directories and
+        // sits with the other heavy-but-recoverable operations.
+        Route::post('/prune', [MaintenanceApiController::class, 'prune'])
+            ->middleware('throttle:vanguard.restore')
+            ->name('prune');
+
+        Route::post('/cleanup-tmp', [MaintenanceApiController::class, 'cleanupTmp'])
+            ->middleware('throttle:vanguard.run')
+            ->name('cleanup-tmp');
     });
 
     // ─── Dashboard SPA — catch-all EN DERNIER ────────────────────

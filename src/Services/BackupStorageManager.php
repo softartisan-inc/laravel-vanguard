@@ -87,6 +87,51 @@ class BackupStorageManager
         $this->trackedTmpFiles = [];
     }
 
+    /**
+     * Delete Vanguard session tmp directories older than $hours.
+     *
+     * cleanTmp() removes the current session's directory in a finally block;
+     * a worker killed by a timeout or an OOM never reaches it and leaves the
+     * dump behind. This is the sweep for those.
+     *
+     * It lives here rather than in the command because both the console and
+     * the dashboard call it: the same code, so the two cannot drift apart.
+     *
+     * @param  int  $hours  Directories untouched for longer than this go
+     * @return int Number of directories removed
+     */
+    public function cleanOrphanedTmp(int $hours = 6): int
+    {
+        $base = rtrim(config('vanguard.tmp_path', storage_path('vanguard-tmp')), '/');
+        $hours = max(1, $hours);
+
+        if (! is_dir($base)) {
+            return 0;
+        }
+
+        $cutoff = time() - ($hours * 3600);
+        $removed = 0;
+
+        foreach (array_diff(scandir($base), ['.', '..']) as $entry) {
+            // Only our own directories: the tmp path may be shared, and
+            // anything not named vanguard_* is somebody else's.
+            if (! str_starts_with($entry, 'vanguard_')) {
+                continue;
+            }
+
+            $path = $base.DIRECTORY_SEPARATOR.$entry;
+
+            if (! is_dir($path) || filemtime($path) >= $cutoff) {
+                continue;
+            }
+
+            exec(sprintf('rm -rf %s', escapeshellarg($path)));
+            $removed++;
+        }
+
+        return $removed;
+    }
+
     // ─── Bundle & Persist ─────────────────────────────────────────
 
     /**

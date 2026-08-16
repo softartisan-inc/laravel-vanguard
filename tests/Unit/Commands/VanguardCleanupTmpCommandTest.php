@@ -35,7 +35,7 @@ class VanguardCleanupTmpCommandTest extends TestCase
 
         $this->artisan('vanguard:cleanup-tmp')
             ->assertSuccessful()
-            ->expectsOutputToContain('nothing to clean');
+            ->expectsOutputToContain('Removed 0');
     }
 
     #[Test]
@@ -87,8 +87,8 @@ class VanguardCleanupTmpCommandTest extends TestCase
     #[Test]
     public function cleanup_tmp_removes_only_directories_older_than_hours_threshold(): void
     {
-        $staleDir  = $this->tmpBase.'/vanguard_stale_'.uniqid();
-        $freshDir  = $this->tmpBase.'/vanguard_fresh_'.uniqid();
+        $staleDir = $this->tmpBase.'/vanguard_stale_'.uniqid();
+        $freshDir = $this->tmpBase.'/vanguard_fresh_'.uniqid();
 
         mkdir($staleDir, 0700, true);
         mkdir($freshDir, 0700, true);
