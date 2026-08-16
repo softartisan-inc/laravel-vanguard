@@ -197,6 +197,12 @@ return [
         'run' => env('VANGUARD_RATE_LIMIT_RUN', 5),
         'restore' => env('VANGUARD_RATE_LIMIT_RESTORE', 3),
         'api' => env('VANGUARD_RATE_LIMIT_API', 60),
+        // Its own bucket, deliberately. A named limiter is keyed by name and
+        // user, not by route, so sharing 'run' meant five loads of the health
+        // page locked out the backup trigger, the download — and the health
+        // page itself, the one screen that reports breakage. Twelve is ample
+        // for a probe that writes to every destination on each call.
+        'health' => env('VANGUARD_RATE_LIMIT_HEALTH', 12),
     ],
 
     /*

@@ -61,10 +61,13 @@ Route::middleware([VanguardAuthenticate::class])->group(function () {
             ->name('cleanup-tmp');
 
         // Health — a read, but one that writes and deletes an object on every
-        // enabled destination. Limited with the heavy operations so an open
-        // dashboard tab cannot hammer the bucket once a second.
+        // enabled destination, so it gets a limiter rather than none. Its own,
+        // though: a named limiter is keyed by name and user, not by route, so
+        // sharing 'run' meant five loads of the landing page 429'd the backup
+        // trigger, the download, and the health page itself — the screen that
+        // reports breakage, blocked by having been read.
         Route::get('/health', [HealthController::class, 'show'])
-            ->middleware('throttle:vanguard.run')
+            ->middleware('throttle:vanguard.health')
             ->name('health');
     });
 

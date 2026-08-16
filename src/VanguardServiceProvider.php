@@ -180,6 +180,7 @@ class VanguardServiceProvider extends ServiceProvider
             'vanguard.run' => 'run',
             'vanguard.restore' => 'restore',
             'vanguard.api' => 'api',
+            'vanguard.health' => 'health',
         ] as $name => $key) {
             $max = (int) config("vanguard.rate_limits.{$key}", 60);
 
