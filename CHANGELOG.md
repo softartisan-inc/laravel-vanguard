@@ -7,6 +7,30 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
+## [2.0.1] — 2026-08-16
+
+Everything below was found by exercising the package against a real MariaDB
+server, a real PostgreSQL server, a real Redis queue and real S3-compatible
+object storage, rather than against fakes.
+
+### Added
+- **Backup notifications actually exist.** `config('vanguard.notifications')` has described mail and Slack alerts on success and failure since 1.0.0, and the changelog listed them as a feature, but no code ever read that config: there was no notification, no mailable, no sender. Setting `VANGUARD_NOTIFY_MAIL` bought silence — which is how a broken destination goes unnoticed for months. The backup outcome events now feed a listener honouring `on_failure`, `on_success`, `mail.to` and `slack.webhook_url`. A channel that throws is logged, never allowed to turn a working backup into a failed one.
+- `VANGUARD_LOCAL_ENABLED`, `VANGUARD_LOCAL_DISK`, `VANGUARD_LOCAL_PATH` — see 2.0.0's note; the local destination was hardcoded on.
+- `vanguard:install` now names the alert and local-destination variables in its next steps, instead of walking through every setting except the one that says when a backup fails.
+
+### Fixed
+- **`--all-tenants` backed up the first tenant only.** `cleanTmp()` deletes the session tmp directory after each backup and the path was computed once per manager, so every tenant after the first wrote into a directory that no longer existed (`Cannot open dump destination`). The queue path hid it: a dispatched job resolves a fresh manager per tenant.
+- **A MySQL restore could not run at all.** The command was built from `mysqlConnectionArgs()`, which appended `--single-transaction --quick --lock-tables=false --set-gtid-purged=OFF` — mysqldump options that the `mysql` client rejects as unknown, exiting before reading a statement. A test asserted the broken behaviour, so nothing caught it.
+- **Restoring the landlord database rewound the backup catalogue.** The dump contains `vanguard_backups` itself, captured mid-run: after a restore the backup just restored came back as `running` and was refused on the next attempt, while every backup taken since disappeared from the catalogue though its archive still existed. The rows are preserved across the restore.
+- **A file changing during the archive failed the whole backup.** GNU tar exits 1 for "file changed as we read it" and 2 or above for a real failure; every non-zero code was fatal, so a filesystem backup racing its own logs, sessions and uploads failed at random. Archiving keeps the archive on exit 1 and logs the affected members; extraction during a restore still treats any non-zero exit as fatal.
+- **PostgreSQL restores were impossible on any password-protected server.** `PGPASSWORD=x gunzip -c file | psql` gives the variable to the first command of the pipeline only, so psql prompted and died with "password authentication failed". The password now goes into the process environment.
+- **`pg_dump` still hid its failures behind gzip** — the same defect the MySQL path lost in 2.0. It now runs through `proc_open`, with stderr kept out of the archive and a non-zero exit failing the backup.
+- **`vanguard:prune --days=0` was silently ignored** ("0" is falsy), and `--days=abc` was read as 0, pruning every completed backup and deleting its archive from every destination. Reproduced against a real bucket: seventeen backups gone in one command. The option is validated now.
+- **`--queue` did nothing.** The flag was declared as "force dispatch to queue even if queue.enabled=false" and read by nobody. It now dispatches for every target, including filesystem backups, via a new `__filesystem__` job sentinel. Without the flag, a hand-typed backup still runs inline — a job nobody works off is the silent no-op this package exists to prevent.
+- `BackupStorageManager` no longer opens a temporary directory in its constructor. It is resolved by every dashboard request and every restore, most of which write no temporary file, and each resolution left an empty `0700` directory behind for good — 687 had accumulated on the installation this was found on.
+
+---
+
 ## [2.0.0] — 2026-08-15
 
 Three failures this release fixes were silent: a dump that died halfway was still

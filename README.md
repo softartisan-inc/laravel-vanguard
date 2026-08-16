@@ -124,6 +124,31 @@ These options apply to the `mysqldump` binary only. When the binary is missing, 
 
 ---
 
+## Notifications
+
+Vanguard tells you when a backup fails. Until 2.0.1 this config existed and
+nothing read it, so an installation could believe it was protected while every
+run failed — set the address and check that a test failure reaches you.
+
+```php
+'notifications' => [
+    'on_failure' => env('VANGUARD_NOTIFY_FAILURE', true),
+    'on_success' => env('VANGUARD_NOTIFY_SUCCESS', false),
+    'mail'  => ['enabled' => true,  'to' => env('VANGUARD_NOTIFY_MAIL')],
+    'slack' => ['enabled' => false, 'webhook_url' => env('VANGUARD_SLACK_WEBHOOK')],
+],
+```
+
+| Setting | Effect |
+| --- | --- |
+| `on_failure` | Notify when a backup fails. On by default — leave it on. |
+| `on_success` | Notify on every successful backup too. Off by default; useful while you are still proving a new destination works. |
+| `mail.to` | Address the notification is sent to. **Empty means no alert at all.** |
+| `slack.webhook_url` | Incoming-webhook URL, posted to directly — no extra channel package required. |
+
+A channel that fails (mail server down, webhook unreachable) is logged and never
+turns a working backup into a failed one.
+
 ## Authentication
 
 ```php
