@@ -32,7 +32,9 @@
           <td class="col-date">{{ r.created_at ? formatDate(r.created_at) : '—' }}</td>
           <td v-if="withActions">
             <div class="action-row">
-              <button class="btn btn-ghost btn-sm" @click="$emit('restore', r.id)">
+              <!-- The whole record, not just the id: the restore dialog has
+                   to know which target the operator must type back. -->
+              <button class="btn btn-ghost btn-sm" @click="$emit('restore', r)">
                 ↩ Restore
               </button>
               <button class="btn btn-danger btn-sm" @click="$emit('delete', r.id)">

@@ -36,24 +36,34 @@
         v-else
         :records="backups.data"
         :with-actions="true"
-        @restore="confirmRestore"
+        @restore="askRestore"
         @delete="confirmDelete"
       />
     </div>
+
+    <RestoreModal
+      v-if="restoring"
+      :record="restoring"
+      @close="restoring = null"
+      @success="load(backups.meta?.current_page ?? 1)"
+    />
   </div>
 </template>
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import BackupTable  from '../components/BackupTable.vue'
+import RestoreModal from '../components/RestoreModal.vue'
 import VPagination  from '../components/VPagination.vue'
 import { useBackups } from '../composables/useBackups.js'
 import { useToast }   from '../composables/useToast.js'
 
-const { backups, loading, fetchBackups, deleteBackup, restoreBackup } = useBackups()
+const { backups, loading, fetchBackups, deleteBackup } = useBackups()
 const toast = useToast()
 
-const filters = reactive({ status: '', type: '' })
+const filters   = reactive({ status: '', type: '' })
+// The record being restored, or null when the dialog is closed.
+const restoring = ref(null)
 
 async function load(page = 1) {
   const f = {}
@@ -73,14 +83,14 @@ async function confirmDelete(id) {
   }
 }
 
-async function confirmRestore(id) {
-  if (!confirm(`Restore backup #${id}? This will overwrite current database data.`)) return
-  try {
-    await restoreBackup(id)
-    toast.success('Restore completed successfully.')
-  } catch (e) {
-    toast.error(e.message)
-  }
+/**
+ * A restore is refused unless the operator types the target's name back, so it
+ * cannot be a yes/no prompt: the dialog is where the name is typed, and its
+ * button stays inert until what was typed matches. RestoreModal reports the
+ * outcome — a queued restore and its id, or the server's refusal.
+ */
+function askRestore(record) {
+  restoring.value = record
 }
 
 onMounted(() => load(1))

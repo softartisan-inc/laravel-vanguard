@@ -52,8 +52,21 @@ export function useBackups() {
     await api.delete(`/backups/${id}`)
   }
 
-  async function restoreBackup(id, options = {}) {
+  /**
+   * Queue a restore.
+   *
+   * `confirm` is not optional: the endpoint refuses the call with a 400 unless
+   * it repeats the target's name exactly — the tenant id, or 'landlord' /
+   * 'filesystem' for the untenanted targets. It is an API rule, not an
+   * interface courtesy, so it is a required argument here rather than one more
+   * key in an options bag.
+   *
+   * Answers 202 with { restore_id, status: 'pending' }. Nothing has been
+   * restored when this resolves.
+   */
+  async function restoreBackup(id, confirm, options = {}) {
     return api.post(`/backups/${id}/restore`, {
+      confirm,
       verify_checksum: true,
       restore_db:      true,
       restore_storage: false,
