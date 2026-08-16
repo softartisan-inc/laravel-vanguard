@@ -7,6 +7,31 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
+## [2.2.0] — 2026-08-16
+
+Restores get what backups already had: a record of what happened, and an alarm
+when it doesn't.
+
+**Read this before upgrading:** this release wires the machinery, not the
+button. The dashboard's restore endpoint still runs synchronously and still
+creates no history row, so a failed restore triggered from the UI does **not**
+yet alert anyone. That arrives when the API switches to the queued path.
+
+### Added
+- **A restore history.** The new `vanguard_restores` table records every restore: what it targeted, which copy it read, with which options, who asked, when it started and finished, and — on failure — the exact error, not the "check server logs" the HTTP layer returns. The target is copied onto the row rather than read through the relation, so the history outlives the backup it restored.
+- **`RunRestoreJob`** runs a restore off the queue Vanguard already uses. A restore of a live tenant runs for minutes; inside an HTTP request that answer is lost to the first proxy timeout while the server carries on regardless. One attempt only — replaying a partial write into a live database is not a retry — and a `failed()` handler so a killed worker or an expired timeout still ends the row and raises the alarm instead of leaving it `running` for ever.
+- **Live phases.** `RestoreService` announces `downloading`, `verifying`, `unpacking`, `restoring database` and `restoring files` through an optional callback. Deliberately not a percentage: nothing in the chain reports real progress, and an invented percentage is a false statement. Without a callback the service behaves exactly as before, so the console path is untouched.
+- **`Vanguard::restoreActor()`** names the operator behind a restore. The package cannot presume the host application's user model, and "who restored the production database" is the first question asked afterwards.
+- **A failed restore raises the same alarm as a failed backup**, through the same listener, config keys and channels. A restore is attempted when something has already gone wrong; failing it silently leaves the operator believing the recovery worked.
+
+### Fixed
+- **A landlord restore erased the restore history.** `preservingCatalogue()` protected `vanguard_backups` and nothing else, so the operation deleted the record of itself. Found by restoring against a live database — no unit test could see it, since they mock the service.
+- **Restore bookkeeping is pinned to the central connection.** An unpinned Eloquent model re-resolves `database.default` on every write, so a tenancy swap or a worker with a stale default sent the history write to a database where the table does not exist — aborting the restore before it began.
+- **An oversized error message suppressed the alert it was reporting.** Unbounded stderr written to a `text` column throws from inside the catch block, so the failure event never fired. The message is truncated at storage, and a failure to persist no longer prevents the alarm.
+- Notifications carry the first line of an error, capped, instead of the whole stderr: database client errors routinely name the host and the user, and until now that text stopped at the log file.
+
+---
+
 ## [2.1.0] — 2026-08-16
 
 ### Added
