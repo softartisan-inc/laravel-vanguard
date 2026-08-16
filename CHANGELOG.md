@@ -7,6 +7,45 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
+## [2.3.1] — 2026-08-16
+
+The four things 2.3.0 shipped without. One of them is a credential leak that
+had already been fixed once, in March 2026, on a branch nobody merged.
+
+**Read this before upgrading.** How the MySQL and MariaDB clients are invoked
+has changed — the password now arrives in a temporary defaults file instead of
+the environment. Nothing about your configuration changes, but the client now
+reads one more option file, and it is the option file where an unusual
+`my.cnf` and an awkward password would show up. Run one backup **and one
+restore** after upgrading rather than assume; a dump that cannot authenticate
+fails loudly, but only once it runs.
+
+### Security
+- **The MySQL password no longer travels through the process environment.** It was passed in `MYSQL_PWD`, which is not the private channel it looks like: the environment of a running process is readable, through `/proc/<pid>/environ`, by anything running as the same user — a second PHP-FPM pool, a stray shell, any compromised dependency — for as long as the dump lasts. And because it was set on the *worker* rather than on the child, a fatal signal, which skips every `finally` block, left it set for every process started afterwards. It now goes into a temporary file created `0600` before the secret is written to it, handed to the client with `--defaults-extra-file=` — which has to be the client's *first* argument, or it is rejected as an unknown variable — and deleted in a `finally` block on the dump and the restore alike, including when either throws. There is no `MYSQL_PWD` left anywhere in the package. The password has never been on the command line, where `ps` would show it to every user of the machine, and still is not.
+- **A password containing `#`, a quote, a backslash or a leading or trailing space now survives.** The defaults file is ini-shaped: unquoted, a `#` starts a comment and the surrounding spaces are stripped, so the client would have authenticated with a truncated password and the backup would have died with "Access denied" — indistinguishable from a wrong password, and a very expensive night to diagnose. The value is written double-quoted with its backslashes and quotes escaped, which is pinned by a test that asks the real `mysqldump` binary, through `--print-defaults`, what it read back.
+
+### Fixed
+- **The health screen contradicted itself on the "twice the interval" rule.** A heartbeat landing exactly on twice the backup interval was reported dead, while a backup landing exactly on twice the same threshold was reported fresh: one page, one rule, two answers, and an operator with a red cron beside a green freshness row on the same timestamp had no way to tell which of the two was lying. The boundary is inclusive on both now — twice the interval is what a run is allowed to slip by, and a run that slipped by exactly that has not missed anything yet. The alarm belongs one second later.
+- **An enabled destination with no disk was indistinguishable from a disabled one**, and it is the more dangerous of the two. Both reported `writable: null, reason: null`, the shape that means "not probed, nothing claimed" — so the screen said nothing was wrong with a destination the operator had switched on and which could not possibly work. It is now a named failure telling you which key to set. On the write side the same value was passed straight through: a *blank* disk name — what `VANGUARD_REMOTE_DISK=` in a `.env` produces, the key being present so the config default never applies — is falsy, and `Storage::disk('')` answers with the application's **default** disk, so archives landed somewhere nobody had chosen while the record claimed the destination; a null one crashed several frames down naming an argument instead of the setting. Both are refused by name before a byte is written. If a backup starts failing after this upgrade with "Destination [...] is enabled but names no disk", it was already writing to the wrong place — check where your last archives actually went.
+- **The delete confirmation in the dashboard was still the browser's `confirm()`.** It could say no more than "#41" — not which target, not which date — and it is the one dialog a browser may stop showing: after a few of them Chrome offers to suppress further prompts from the page, and a suppressed `confirm()` returns false silently, so the delete button would simply have stopped working with nothing to explain why. It now uses the same modal the restore path uses, naming the target and the date the archive was taken. It does **not** ask for the target's name to be typed back: that guard belongs to restore and prune, which overwrite or erase data you still have, and asking for it everywhere is how operators learn to type through confirmations without reading them.
+
+### Changed
+- **`POST /vanguard/api/backups/{id}/restore` refuses `database` on presence alone**, the way it already refuses `wipe_storage`, with a `400` naming the console command instead. It was previously ignored — silently, which is the failure mode this option cannot afford: a dashboard user who believes they are rehearsing into a scratch database, and is quietly given the real one, gets the worst outcome the feature has. Redirecting a restore stays something you do at a console, in front of the machine. Nothing carries it into the queued path either: `RunRestoreJob` builds its options from the history row, and there is no column that could hold one.
+
+### Added
+- **`--database=` is documented.** It shipped in 2.3.0 without a line in the README. Its tenant path is now pinned as tightly as its landlord one: that the redirect applies to the *tenant's own* connection and not to the landlord's, that the tenant's host, port and credentials come through unchanged, and that the connection `stancl/tenancy` installed is left exactly as it was — a rehearsal must not repoint the tenancy window it borrows. Each of those tests was checked against a deliberate mutation of the code it covers, so none of them is green by accident.
+
+### What a green suite still cannot tell you
+The credential change is exercised against stub binaries and, for the quoting
+decision, against the real `mysqldump` parser — but no test here authenticates
+against a live MySQL server. Two things are therefore yours to confirm on your
+own installation, once, right after upgrading:
+
+- **One backup and one restore of a MySQL or MariaDB target.** The client now reads an additional option file, and `--defaults-extra-file` is *additive*: your system `my.cnf` and `~/.my.cnf` are still read, and still lose to ours on `password`. If you keep credentials or a `[client]` section of your own there, this is the run that proves the two compose the way you expect.
+- **The same, if your password contains anything unusual.** `#`, quotes, backslashes and edge spaces are handled deliberately and tested against the real parser; the account you actually use is the one nobody here could try.
+
+---
+
 ## [2.3.0] — 2026-08-16
 
 The dashboard stops being a screen that describes the configuration and starts
