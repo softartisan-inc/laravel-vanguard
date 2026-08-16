@@ -81,6 +81,21 @@ class BackupDownloadTest extends TestCase
     }
 
     #[Test]
+    public function it_answers_422_for_an_unknown_source_value_even_without_an_accept_header(): void
+    {
+        // Deliberately $this->get(...), not getJson(...): a browser navigating
+        // straight to the download link (<a href>, window.location) sends no
+        // Accept: application/json, and Laravel's validate() would otherwise
+        // redirect such a request instead of answering the documented 422.
+        Storage::disk('local')->put('vanguard-backups/local.tar', 'LOCAL-BYTES');
+
+        $backup = $this->makeRecord(['file_path' => 'vanguard-backups/local.tar']);
+
+        $this->get("/vanguard/api/backups/{$backup->id}/download?source=bogus")
+            ->assertStatus(422);
+    }
+
+    #[Test]
     public function it_refuses_a_destination_the_backup_never_reached(): void
     {
         Storage::disk('local')->put('vanguard-backups/local.tar', 'LOCAL-BYTES');

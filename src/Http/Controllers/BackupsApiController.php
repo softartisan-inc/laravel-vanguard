@@ -308,7 +308,19 @@ class BackupsApiController extends Controller
      */
     public function download(int $id, Request $request): StreamedResponse|JsonResponse
     {
-        $request->validate(['source' => 'nullable|in:local,remote,ftp']);
+        // Built by hand rather than $request->validate(), the same reason
+        // GuardsDestructiveActions::rejectUnlessConfirmed() does: validate()
+        // only answers 422 when the request expects JSON, and a direct
+        // browser navigation to a download link — this endpoint's normal
+        // invocation, not an edge case — sends no Accept: application/json
+        // and would otherwise be redirected instead of told the value is bad.
+        $source = $request->input('source');
+
+        if ($source !== null && ! in_array($source, ['local', 'remote', 'ftp'], true)) {
+            return response()->json([
+                'error' => "The selected source [{$source}] is invalid.",
+            ], 422);
+        }
 
         $record = BackupRecord::on(Vanguard::centralConnection())->find($id);
 
@@ -325,7 +337,7 @@ class BackupsApiController extends Controller
             'ftp' => $record->ftp_path,
         ]);
 
-        $source = $request->input('source') ?? array_key_first($paths);
+        $source = $source ?? array_key_first($paths);
 
         if ($source === null || ! isset($paths[$source])) {
             return response()->json([
