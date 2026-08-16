@@ -10,17 +10,27 @@ use SoftArtisan\Vanguard\Vanguard;
 
 class MaintenanceEndpointTest extends TestCase
 {
+    private string $tmpBase;
+
     protected function setUp(): void
     {
         parent::setUp();
 
         Vanguard::auth(fn ($request) => true);
         Vanguard::restoreActor(fn () => 'ops@in-immo.app');
+
+        // A tmp base of this test's own, not the shared default the base
+        // TestCase points at: a `removed` count that depends on whatever
+        // earlier, unrelated test runs left lying around proves nothing
+        // about the sweep itself.
+        $this->tmpBase = sys_get_temp_dir().'/vanguard_maintenance_test_'.uniqid();
+        config(['vanguard.tmp_path' => $this->tmpBase]);
     }
 
     protected function tearDown(): void
     {
         Vanguard::$restoreActorUsing = null;
+        exec('rm -rf '.escapeshellarg($this->tmpBase));
         parent::tearDown();
     }
 
