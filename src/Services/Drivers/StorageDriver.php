@@ -2,6 +2,7 @@
 
 namespace SoftArtisan\Vanguard\Services\Drivers;
 
+use Illuminate\Support\Facades\Log;
 use RuntimeException;
 
 class StorageDriver
@@ -18,10 +19,10 @@ class StorageDriver
      *
      * Requires GNU tar — standard on Linux/macOS (production target).
      *
-     * @param  array   $paths        Absolute paths to include
-     * @param  array   $exclude      Absolute paths to exclude
+     * @param  array  $paths  Absolute paths to include
+     * @param  array  $exclude  Absolute paths to exclude
      * @param  string  $destination  Absolute path for the output .tar.gz
-     * @return string                Path to created archive
+     * @return string Path to created archive
      */
     public function archive(array $paths, array $exclude, string $destination): string
     {
@@ -32,6 +33,7 @@ class StorageDriver
                 sprintf('tar czf %s --files-from /dev/null 2>&1', escapeshellarg($destination)),
                 'tar empty',
             );
+
             return $destination;
         }
 
@@ -62,7 +64,7 @@ class StorageDriver
             $pathArgs,
         );
 
-        $this->exec($cmd, 'tar archive');
+        $this->execArchive($cmd, 'tar archive');
 
         if (! file_exists($destination)) {
             throw new RuntimeException("Storage archive was not created: {$destination}");
@@ -78,9 +80,9 @@ class StorageDriver
      * absolute path as their member names, so the leading components are
      * dropped for those — see legacyPrefixDepth() for how many and why.
      *
-     * @param  string  $source       Absolute path to the .tar.gz file
+     * @param  string  $source  Absolute path to the .tar.gz file
      * @param  string  $destination  Directory to extract into
-     * @param  bool    $wipe         Whether to wipe the destination first
+     * @param  bool  $wipe  Whether to wipe the destination first
      */
     public function extract(string $source, string $destination, bool $wipe = false): void
     {
@@ -117,7 +119,6 @@ class StorageDriver
      * storage/app/public/… . A path outside storage_path() — only reachable by
      * calling archive() directly — is stored under its own parent directory.
      *
-     * @param  string  $path
      * @return array{base: string, relative: string}
      */
     protected function splitAtBase(string $path): array
@@ -135,9 +136,8 @@ class StorageDriver
     /**
      * Express an absolute path relative to whichever archive base contains it.
      *
-     * @param  string         $path
      * @param  array<string>  $bases  Base directories the archive is built from
-     * @return string                 The path relative to its base
+     * @return string The path relative to its base
      */
     protected function relativeToBases(string $path, array $bases): string
     {
@@ -176,9 +176,9 @@ class StorageDriver
      *     roots. Failing that too, nothing is stripped and the archive is
      *     extracted verbatim, which is what this driver has always done.
      *
-     * @param  string  $source       Absolute path to the .tar.gz file
+     * @param  string  $source  Absolute path to the .tar.gz file
      * @param  string  $destination  Directory the archive is extracted into
-     * @return int                   Number of components to strip
+     * @return int Number of components to strip
      */
     protected function legacyPrefixDepth(string $source, string $destination): int
     {
@@ -278,7 +278,6 @@ class StorageDriver
      * A listing failure is not raised here: the extraction that follows reports
      * the real error with its own message.
      *
-     * @param  string  $source
      * @return array<string>
      */
     protected function members(string $source): array
@@ -294,7 +293,7 @@ class StorageDriver
      * Reads from vanguard.sources.filesystem_paths (relative to storage_path())
      * and filters out paths that do not exist.
      *
-     * @return array<string>  Existing absolute directory paths
+     * @return array<string> Existing absolute directory paths
      */
     public function resolveBackupPaths(): array
     {
@@ -310,7 +309,7 @@ class StorageDriver
      *
      * Reads from vanguard.sources.filesystem_exclude (relative to storage_path()).
      *
-     * @return array<string>  Absolute paths to exclude
+     * @return array<string> Absolute paths to exclude
      */
     public function resolveExcludePaths(): array
     {
@@ -322,7 +321,7 @@ class StorageDriver
     /**
      * Execute a shell command and throw a RuntimeException on non-zero exit.
      *
-     * @param  string  $cmd    The shell command to run (must use escapeshellarg for all user data)
+     * @param  string  $cmd  The shell command to run (must use escapeshellarg for all user data)
      * @param  string  $label  Short label used in the error message (e.g. 'tar archive')
      *
      * @throws RuntimeException
@@ -336,5 +335,42 @@ class StorageDriver
                 "[Vanguard:{$label}] Command failed (exit {$exitCode}):\n".implode("\n", $output)
             );
         }
+    }
+
+    /**
+     * Execute a tar archive command, tolerating the "files differ" exit code.
+     *
+     * GNU tar exits 1 when a file changed while it was being read or vanished
+     * mid-run, and 2 or above when it actually failed. On a live application
+     * every backup races the logs, sessions and temporary uploads it archives,
+     * so treating exit 1 as fatal means the backup fails at random — which is
+     * exactly how a filesystem backup dies on a busy server. The archive is
+     * complete apart from the members named in the warning, so it is kept and
+     * the warning is logged.
+     *
+     * @param  string  $cmd  The shell command to run
+     * @param  string  $label  Short label used in the error message
+     *
+     * @throws RuntimeException When tar fails for real (exit 2 or above)
+     */
+    protected function execArchive(string $cmd, string $label): void
+    {
+        exec($cmd, $output, $exitCode);
+
+        if ($exitCode === 0) {
+            return;
+        }
+
+        if ($exitCode === 1) {
+            Log::warning("[Vanguard:{$label}] Some files changed while being archived; the archive was kept.", [
+                'output' => implode("\n", $output),
+            ]);
+
+            return;
+        }
+
+        throw new RuntimeException(
+            "[Vanguard:{$label}] Command failed (exit {$exitCode}):\n".implode("\n", $output)
+        );
     }
 }

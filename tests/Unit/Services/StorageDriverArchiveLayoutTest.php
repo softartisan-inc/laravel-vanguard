@@ -3,6 +3,7 @@
 namespace SoftArtisan\Vanguard\Tests\Unit\Services;
 
 use PHPUnit\Framework\Attributes\Test;
+use RuntimeException;
 use SoftArtisan\Vanguard\Services\Drivers\StorageDriver;
 use SoftArtisan\Vanguard\Tests\TestCase;
 
@@ -16,15 +17,17 @@ use SoftArtisan\Vanguard\Tests\TestCase;
 class StorageDriverArchiveLayoutTest extends TestCase
 {
     private StorageDriver $driver;
+
     private string $tmpDir;
+
     private string $storageDir;
 
     protected function setUp(): void
     {
         parent::setUp();
 
-        $this->driver     = new StorageDriver;
-        $this->tmpDir     = sys_get_temp_dir().'/vanguard_layout_'.uniqid();
+        $this->driver = new StorageDriver;
+        $this->tmpDir = sys_get_temp_dir().'/vanguard_layout_'.uniqid();
         $this->storageDir = $this->tmpDir.'/storage';
 
         mkdir($this->storageDir.'/app', 0755, true);
@@ -276,15 +279,15 @@ class StorageDriverArchiveLayoutTest extends TestCase
      * <absolute paths>`, which makes GNU tar strip the leading slash and store
      * the producing machine's whole absolute path as the member name.
      *
-     * @param  string         $name    File name of the archive inside the temp dir
-     * @param  array<string>  $roots   Backup roots to fake, relative to the fake storage dir
-     * @param  string         $prefix  Absolute-ish prefix of the fake producing machine
-     * @return string                  Absolute path to the created archive
+     * @param  string  $name  File name of the archive inside the temp dir
+     * @param  array<string>  $roots  Backup roots to fake, relative to the fake storage dir
+     * @param  string  $prefix  Absolute-ish prefix of the fake producing machine
+     * @return string Absolute path to the created archive
      */
     private function makeLegacyArchive(string $name, array $roots, string $prefix = 'var/www/html/storage'): string
     {
         $machine = $this->tmpDir.'/legacy-machine/'.$name;
-        $base    = $machine.'/'.$prefix;
+        $base = $machine.'/'.$prefix;
 
         $absoluteRoots = [];
 
@@ -321,5 +324,61 @@ class StorageDriverArchiveLayoutTest extends TestCase
             ->reject(fn ($m) => $m === '' || str_ends_with($m, '/'))
             ->values()
             ->all();
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // tar exit codes — a changed file is not a failed backup
+    // ─────────────────────────────────────────────────────────────
+
+    #[Test]
+    public function it_keeps_the_archive_when_tar_reports_that_files_changed(): void
+    {
+        // GNU tar exits 1 for "file changed as we read it". On a live server the
+        // logs and temporary uploads under storage/ change during every run, so
+        // a fatal reading of that code loses the backup entirely.
+        $driver = new ExposedStorageDriver;
+
+        $driver->runArchive('sh -c \'echo "tar: ./app/private/temp: file changed as we read it" >&2; exit 1\' 2>&1', 'tar archive');
+
+        $this->assertTrue(true, 'exit 1 must not throw');
+    }
+
+    #[Test]
+    public function it_still_fails_when_tar_fails_for_real(): void
+    {
+        $driver = new ExposedStorageDriver;
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessageMatches('/exit 2/');
+
+        $driver->runArchive('sh -c \'echo "tar: Cannot open: No such file or directory" >&2; exit 2\' 2>&1', 'tar archive');
+    }
+
+    #[Test]
+    public function extraction_still_treats_any_non_zero_exit_as_fatal(): void
+    {
+        // The tolerance is scoped to archiving: a partial extraction during a
+        // restore must never pass for success.
+        $driver = new ExposedStorageDriver;
+
+        $this->expectException(RuntimeException::class);
+
+        $driver->runExec('sh -c \'exit 1\' 2>&1', 'tar extract');
+    }
+}
+
+/**
+ * Exposes the command runners so the exit-code policy can be asserted directly.
+ */
+class ExposedStorageDriver extends StorageDriver
+{
+    public function runArchive(string $cmd, string $label): void
+    {
+        $this->execArchive($cmd, $label);
+    }
+
+    public function runExec(string $cmd, string $label): void
+    {
+        $this->exec($cmd, $label);
     }
 }

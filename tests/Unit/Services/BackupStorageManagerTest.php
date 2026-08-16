@@ -70,6 +70,19 @@ class BackupStorageManagerTest extends TestCase
     }
 
     #[Test]
+    public function it_leaves_no_directory_behind_when_it_is_never_used(): void
+    {
+        // Resolved on every dashboard request and every restore; most of those
+        // never write a temporary file. A directory per resolution is a leak.
+        $before = glob($this->tmpBase.'/vanguard_*') ?: [];
+
+        new BackupStorageManager;
+        new BackupStorageManager;
+
+        $this->assertSame($before, glob($this->tmpBase.'/vanguard_*') ?: []);
+    }
+
+    #[Test]
     public function it_serves_a_usable_session_directory_again_after_a_clean(): void
     {
         // backupAllTenants() loops in-process and cleans up after each tenant,

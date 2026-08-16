@@ -12,16 +12,12 @@ class BackupStorageManager
 
     protected array $trackedTmpFiles = [];
 
-    /**
-     * Create a unique session-scoped temporary directory for this backup run.
-     *
-     * The directory is created with 0700 permissions to restrict access to the
-     * web server user. It is cleaned up automatically after each backup via cleanTmp().
-     */
-    public function __construct()
-    {
-        $this->sessionTmpDir = $this->makeSessionTmpDir();
-    }
+    // The session directory is not opened here on purpose. This service is
+    // resolved by every dashboard request and every restore, most of which
+    // never write a temporary file; creating a directory in the constructor
+    // left one empty 0700 directory behind per resolution, forever — 687 of
+    // them had piled up on the machine this was found on. It is opened on
+    // first use instead, by sessionTmpDir().
 
     /**
      * Return the session tmp directory, opening a fresh one when there is none.
