@@ -4,11 +4,13 @@ namespace SoftArtisan\Vanguard\Services;
 
 use Illuminate\Support\Facades\Storage;
 use RuntimeException;
+use SoftArtisan\Vanguard\Models\BackupRecord;
 
 class BackupStorageManager
 {
-    protected string $sessionTmpDir;
-    protected array  $trackedTmpFiles = [];
+    protected ?string $sessionTmpDir = null;
+
+    protected array $trackedTmpFiles = [];
 
     /**
      * Create a unique session-scoped temporary directory for this backup run.
@@ -18,12 +20,37 @@ class BackupStorageManager
      */
     public function __construct()
     {
-        $base = config('vanguard.tmp_path', storage_path('vanguard-tmp'));
-        $this->sessionTmpDir = rtrim($base, '/').'/'.uniqid('vanguard_', true);
+        $this->sessionTmpDir = $this->makeSessionTmpDir();
+    }
 
-        if (! mkdir($this->sessionTmpDir, 0700, true) && ! is_dir($this->sessionTmpDir)) {
-            throw new RuntimeException("[Vanguard] Cannot create tmp directory: {$this->sessionTmpDir}");
+    /**
+     * Return the session tmp directory, opening a fresh one when there is none.
+     *
+     * One instance serves several backups in a row — backupAllTenants() loops
+     * over the tenants in-process, and cleanTmp() deletes the directory after
+     * each one. Resolving it lazily is what lets the second tenant, and every
+     * tenant after it, still have somewhere to write.
+     */
+    protected function sessionTmpDir(): string
+    {
+        return $this->sessionTmpDir ??= $this->makeSessionTmpDir();
+    }
+
+    /**
+     * Create a uniquely named tmp directory under the configured base path.
+     *
+     * @throws RuntimeException If the directory cannot be created
+     */
+    protected function makeSessionTmpDir(): string
+    {
+        $base = config('vanguard.tmp_path', storage_path('vanguard-tmp'));
+        $dir = rtrim($base, '/').'/'.uniqid('vanguard_', true);
+
+        if (! mkdir($dir, 0700, true) && ! is_dir($dir)) {
+            throw new RuntimeException("[Vanguard] Cannot create tmp directory: {$dir}");
         }
+
+        return $dir;
     }
 
     // ─── Temp File Management ─────────────────────────────────────
@@ -32,12 +59,13 @@ class BackupStorageManager
      * Return an absolute path inside the session tmp directory and register it for cleanup.
      *
      * @param  string  $filename  Relative filename (e.g. 'landlord_1_db.sql.gz')
-     * @return string  Absolute path to the tmp file
+     * @return string Absolute path to the tmp file
      */
     public function tmpPath(string $filename): string
     {
-        $path = $this->sessionTmpDir.DIRECTORY_SEPARATOR.$filename;
+        $path = $this->sessionTmpDir().DIRECTORY_SEPARATOR.$filename;
         $this->trackedTmpFiles[] = $path;
+
         return $path;
     }
 
@@ -48,9 +76,13 @@ class BackupStorageManager
      */
     public function cleanTmp(): void
     {
-        if (is_dir($this->sessionTmpDir)) {
+        if ($this->sessionTmpDir !== null && is_dir($this->sessionTmpDir)) {
             exec(sprintf('rm -rf %s', escapeshellarg($this->sessionTmpDir)));
         }
+
+        // Forget the directory rather than pointing at one that no longer
+        // exists: the next tmpPath() call opens a fresh one.
+        $this->sessionTmpDir = null;
         $this->trackedTmpFiles = [];
     }
 
@@ -66,19 +98,19 @@ class BackupStorageManager
      * destination share the same filesystem — atomic, O(1), zero data copy.
      * Falls back to a stream copy when rename() crosses filesystem boundaries.
      *
-     * @param  array   $files  ['database' => '/tmp/...sql.gz', 'storage' => '/tmp/...tar.gz']
-     * @param  string  $name   Base name for the archive
-     * @return array   ['local_path' => string|null, 'remote_path' => string|null, 'ftp_path' => string|null, 'size' => int, 'checksum' => string]
+     * @param  array  $files  ['database' => '/tmp/...sql.gz', 'storage' => '/tmp/...tar.gz']
+     * @param  string  $name  Base name for the archive
+     * @return array ['local_path' => string|null, 'remote_path' => string|null, 'ftp_path' => string|null, 'size' => int, 'checksum' => string]
      */
     public function bundle(array $files, string $name): array
     {
-        $bundlePath = $this->sessionTmpDir."/{$name}.tar";
+        $bundlePath = $this->sessionTmpDir()."/{$name}.tar";
 
         if (empty($files)) {
             // Create an empty but valid tar with a manifest
-            $manifest = $this->sessionTmpDir.'/manifest.txt';
+            $manifest = $this->sessionTmpDir().'/manifest.txt';
             file_put_contents($manifest, "vanguard backup — no sources configured\n");
-            exec(sprintf('tar cf %s -C %s manifest.txt 2>&1', escapeshellarg($bundlePath), escapeshellarg($this->sessionTmpDir)), $out, $code);
+            exec(sprintf('tar cf %s -C %s manifest.txt 2>&1', escapeshellarg($bundlePath), escapeshellarg($this->sessionTmpDir())), $out, $code);
         } else {
             foreach ($files as $filePath) {
                 if (! file_exists($filePath)) {
@@ -91,7 +123,7 @@ class BackupStorageManager
                 ->implode(' ');
 
             exec(
-                sprintf('tar cf %s -C %s %s 2>&1', escapeshellarg($bundlePath), escapeshellarg($this->sessionTmpDir), $fileArgs),
+                sprintf('tar cf %s -C %s %s 2>&1', escapeshellarg($bundlePath), escapeshellarg($this->sessionTmpDir()), $fileArgs),
                 $out, $code,
             );
         }
@@ -101,8 +133,8 @@ class BackupStorageManager
         }
 
         $checksum = hash_file('sha256', $bundlePath);
-        $size     = filesize($bundlePath);
-        $result   = ['size' => $size, 'checksum' => $checksum, 'local_path' => null, 'remote_path' => null, 'ftp_path' => null];
+        $size = filesize($bundlePath);
+        $result = ['size' => $size, 'checksum' => $checksum, 'local_path' => null, 'remote_path' => null, 'ftp_path' => null];
 
         // Remote first — stream while bundlePath is still on disk.
         // Flysystem's S3 adapter automatically uses multipart upload for large streams.
@@ -122,7 +154,7 @@ class BackupStorageManager
         if (config('vanguard.destinations.ftp.enabled', false)) {
             $ftpDisk = config('vanguard.destinations.ftp.disk', 'ftp');
             $ftpPath = config('vanguard.destinations.ftp.path', 'vanguard-backups')."/{$name}.tar";
-            $stream  = fopen($bundlePath, 'rb');
+            $stream = fopen($bundlePath, 'rb');
             $ok = Storage::disk($ftpDisk)->put($ftpPath, $stream);
             fclose($stream);
             if (! $ok) {
@@ -151,8 +183,8 @@ class BackupStorageManager
      *
      * For any other driver (ftp, sftp, custom local adapters): always streams.
      *
-     * @param  string  $sourcePath   Absolute path to the file to persist (may be consumed by rename)
-     * @param  string  $disk         Filesystem disk name
+     * @param  string  $sourcePath  Absolute path to the file to persist (may be consumed by rename)
+     * @param  string  $disk  Filesystem disk name
      * @param  string  $storagePath  Destination path relative to the disk root
      */
     protected function persistToLocalDisk(string $sourcePath, string $disk, string $storagePath): void
@@ -185,9 +217,9 @@ class BackupStorageManager
     /**
      * Download a stored backup archive into the session tmp directory.
      *
-     * @param  string  $storedPath   Path on disk as recorded in the BackupRecord
+     * @param  string  $storedPath  Path on disk as recorded in the BackupRecord
      * @param  string  $destination  Which destination to read from: 'local' | 'remote' | 'ftp'
-     * @return string  Absolute path to the downloaded file in the tmp directory
+     * @return string Absolute path to the downloaded file in the tmp directory
      *
      * @throws RuntimeException If the file does not exist on the disk
      */
@@ -195,8 +227,8 @@ class BackupStorageManager
     {
         $disk = match ($destination) {
             'remote' => config('vanguard.destinations.remote.disk', 's3'),
-            'ftp'    => config('vanguard.destinations.ftp.disk', 'ftp'),
-            default  => config('vanguard.destinations.local.disk', 'local'),
+            'ftp' => config('vanguard.destinations.ftp.disk', 'ftp'),
+            default => config('vanguard.destinations.local.disk', 'local'),
         };
 
         $tempFile = $this->tmpPath(basename($storedPath));
@@ -205,7 +237,7 @@ class BackupStorageManager
             throw new RuntimeException("Backup file not found on disk [{$disk}]: {$storedPath}");
         }
 
-        $readStream  = Storage::disk($disk)->readStream($storedPath);
+        $readStream = Storage::disk($disk)->readStream($storedPath);
         $writeStream = fopen($tempFile, 'wb');
         stream_copy_to_stream($readStream, $writeStream);
         fclose($readStream);
@@ -218,13 +250,13 @@ class BackupStorageManager
      * Extract a bundle archive and return a map of component files.
      *
      * @param  string  $bundlePath  Absolute path to the .tar bundle
-     * @return array   ['database' => '/tmp/path.sql.gz', 'storage' => '/tmp/path.tar.gz']
+     * @return array ['database' => '/tmp/path.sql.gz', 'storage' => '/tmp/path.tar.gz']
      *
      * @throws RuntimeException If extraction fails
      */
     public function unBundle(string $bundlePath): array
     {
-        $extractDir = $this->sessionTmpDir.'/extract_'.uniqid();
+        $extractDir = $this->sessionTmpDir().'/extract_'.uniqid();
         @mkdir($extractDir, 0700, true);
 
         exec(
@@ -258,7 +290,7 @@ class BackupStorageManager
      *
      * @param  string  $filePath  Absolute path to the file to verify
      * @param  string  $expected  Expected SHA-256 hex digest
-     * @return bool    true if the checksum matches
+     * @return bool true if the checksum matches
      */
     public function verifyChecksum(string $filePath, string $expected): bool
     {
@@ -275,14 +307,14 @@ class BackupStorageManager
      * Individual deletion failures are logged as warnings and do not halt pruning.
      *
      * @param  string|null  $tenantId  When provided, only prune records for this tenant
-     * @return int  Number of records deleted
+     * @return int Number of records deleted
      */
     public function pruneOldBackups(?string $tenantId = null): int
     {
-        $days   = config('vanguard.retention.days', 30);
+        $days = config('vanguard.retention.days', 30);
         $cutoff = now()->subDays($days);
 
-        $query = \SoftArtisan\Vanguard\Models\BackupRecord::completed()
+        $query = BackupRecord::completed()
             ->where('created_at', '<', $cutoff);
 
         if ($tenantId !== null) {
@@ -312,17 +344,19 @@ class BackupStorageManager
      *
      * No-op when $path is null or the file does not exist on the disk.
      *
-     * @param  string|null  $path         Path as stored on the disk
-     * @param  string       $destination  Which destination to target: 'local' | 'remote' | 'ftp'
+     * @param  string|null  $path  Path as stored on the disk
+     * @param  string  $destination  Which destination to target: 'local' | 'remote' | 'ftp'
      */
     protected function deleteFile(?string $path, string $destination): void
     {
-        if (! $path) return;
+        if (! $path) {
+            return;
+        }
 
         $disk = match ($destination) {
             'remote' => config('vanguard.destinations.remote.disk', 's3'),
-            'ftp'    => config('vanguard.destinations.ftp.disk', 'ftp'),
-            default  => config('vanguard.destinations.local.disk', 'local'),
+            'ftp' => config('vanguard.destinations.ftp.disk', 'ftp'),
+            default => config('vanguard.destinations.local.disk', 'local'),
         };
 
         if (Storage::disk($disk)->exists($path)) {

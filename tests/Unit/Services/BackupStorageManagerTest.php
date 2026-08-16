@@ -2,6 +2,7 @@
 
 namespace SoftArtisan\Vanguard\Tests\Unit\Services;
 
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use PHPUnit\Framework\Attributes\Test;
 use RuntimeException;
@@ -12,6 +13,7 @@ use SoftArtisan\Vanguard\Tests\TestCase;
 class BackupStorageManagerTest extends TestCase
 {
     private BackupStorageManager $manager;
+
     private string $tmpBase;
 
     protected function setUp(): void
@@ -48,7 +50,7 @@ class BackupStorageManagerTest extends TestCase
     public function tmp_path_directory_is_created_on_instantiation(): void
     {
         $path = $this->manager->tmpPath('some_file.txt');
-        $dir  = dirname($path);
+        $dir = dirname($path);
 
         $this->assertDirectoryExists($dir);
     }
@@ -65,6 +67,41 @@ class BackupStorageManagerTest extends TestCase
         $this->manager->cleanTmp();
 
         $this->assertDirectoryDoesNotExist($dir);
+    }
+
+    #[Test]
+    public function it_serves_a_usable_session_directory_again_after_a_clean(): void
+    {
+        // backupAllTenants() loops in-process and cleans up after each tenant,
+        // so every tenant after the first was handed a path inside a directory
+        // that had just been deleted — "Cannot open dump destination".
+        $first = $this->manager->tmpPath('tenant_1_db.sql.gz');
+        file_put_contents($first, 'first');
+
+        $this->manager->cleanTmp();
+
+        $second = $this->manager->tmpPath('tenant_2_db.sql.gz');
+
+        $this->assertDirectoryExists(dirname($second));
+        $this->assertNotSame(dirname($first), dirname($second), 'each run must get its own session directory');
+        $this->assertNotFalse(file_put_contents($second, 'second'));
+    }
+
+    #[Test]
+    public function it_bundles_a_second_backup_after_a_clean(): void
+    {
+        $first = $this->manager->tmpPath('landlord_1_db.sql.gz');
+        file_put_contents($first, 'first dump');
+        $this->manager->bundle(['database' => $first], 'landlord_1');
+        $this->manager->cleanTmp();
+
+        $second = $this->manager->tmpPath('landlord_2_db.sql.gz');
+        file_put_contents($second, 'second dump');
+
+        $result = $this->manager->bundle(['database' => $second], 'landlord_2');
+
+        $this->assertGreaterThan(0, $result['size']);
+        $this->assertNotEmpty($result['checksum']);
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -128,11 +165,11 @@ class BackupStorageManagerTest extends TestCase
     {
         Storage::fake('ftp');
 
-        config(['vanguard.destinations.local.enabled'  => false]);
+        config(['vanguard.destinations.local.enabled' => false]);
         config(['vanguard.destinations.remote.enabled' => false]);
-        config(['vanguard.destinations.ftp.enabled'    => true]);
-        config(['vanguard.destinations.ftp.disk'       => 'ftp']);
-        config(['vanguard.destinations.ftp.path'       => 'backups']);
+        config(['vanguard.destinations.ftp.enabled' => true]);
+        config(['vanguard.destinations.ftp.disk' => 'ftp']);
+        config(['vanguard.destinations.ftp.path' => 'backups']);
 
         $dbDump = $this->manager->tmpPath('dump_ftp.sql.gz');
         file_put_contents($dbDump, gzencode('-- SQL ftp'));
@@ -152,13 +189,13 @@ class BackupStorageManagerTest extends TestCase
         Storage::fake('s3');
         Storage::fake('ftp');
 
-        config(['vanguard.destinations.local.enabled'  => true]);
+        config(['vanguard.destinations.local.enabled' => true]);
         config(['vanguard.destinations.remote.enabled' => true]);
-        config(['vanguard.destinations.remote.disk'    => 's3']);
-        config(['vanguard.destinations.remote.path'    => 'backups']);
-        config(['vanguard.destinations.ftp.enabled'    => true]);
-        config(['vanguard.destinations.ftp.disk'       => 'ftp']);
-        config(['vanguard.destinations.ftp.path'       => 'backups']);
+        config(['vanguard.destinations.remote.disk' => 's3']);
+        config(['vanguard.destinations.remote.path' => 'backups']);
+        config(['vanguard.destinations.ftp.enabled' => true]);
+        config(['vanguard.destinations.ftp.disk' => 'ftp']);
+        config(['vanguard.destinations.ftp.path' => 'backups']);
 
         $dbDump = $this->manager->tmpPath('dump_all.sql.gz');
         file_put_contents($dbDump, gzencode('-- SQL all'));
@@ -177,9 +214,9 @@ class BackupStorageManagerTest extends TestCase
     #[Test]
     public function bundle_ftp_path_is_null_when_ftp_disabled(): void
     {
-        config(['vanguard.destinations.local.enabled'  => true]);
+        config(['vanguard.destinations.local.enabled' => true]);
         config(['vanguard.destinations.remote.enabled' => false]);
-        config(['vanguard.destinations.ftp.enabled'    => false]);
+        config(['vanguard.destinations.ftp.enabled' => false]);
 
         $dbDump = $this->manager->tmpPath('dump_no_ftp.sql.gz');
         file_put_contents($dbDump, gzencode('-- SQL'));
@@ -319,10 +356,10 @@ class BackupStorageManagerTest extends TestCase
         Storage::disk('local')->put($storedPath, 'data');
 
         $old = $this->makeRecord([
-            'status'    => 'completed',
+            'status' => 'completed',
             'file_path' => $storedPath,
         ]);
-        \Illuminate\Support\Facades\DB::table('vanguard_backups')
+        DB::table('vanguard_backups')
             ->where('id', $old->id)
             ->update(['created_at' => now()->subDays(10)]);
 
@@ -342,7 +379,7 @@ class BackupStorageManagerTest extends TestCase
         config(['vanguard.retention.days' => 1]);
 
         $failed = $this->makeRecord(['status' => 'failed']);
-        \Illuminate\Support\Facades\DB::table('vanguard_backups')
+        DB::table('vanguard_backups')
             ->where('id', $failed->id)
             ->update(['created_at' => now()->subDays(10)]);
 
@@ -363,11 +400,11 @@ class BackupStorageManagerTest extends TestCase
         Storage::disk('ftp')->put($ftpPath, 'ftp-data');
 
         $old = $this->makeRecord([
-            'status'   => 'completed',
+            'status' => 'completed',
             'ftp_path' => $ftpPath,
             'file_path' => null,
         ]);
-        \Illuminate\Support\Facades\DB::table('vanguard_backups')
+        DB::table('vanguard_backups')
             ->where('id', $old->id)
             ->update(['created_at' => now()->subDays(10)]);
 
@@ -382,10 +419,10 @@ class BackupStorageManagerTest extends TestCase
     {
         config(['vanguard.retention.days' => 1]);
 
-        $acme   = $this->makeRecord(['status' => 'completed', 'tenant_id' => 'acme']);
+        $acme = $this->makeRecord(['status' => 'completed', 'tenant_id' => 'acme']);
         $globex = $this->makeRecord(['status' => 'completed', 'tenant_id' => 'globex']);
 
-        \Illuminate\Support\Facades\DB::table('vanguard_backups')
+        DB::table('vanguard_backups')
             ->whereIn('id', [$acme->id, $globex->id])
             ->update(['created_at' => now()->subDays(5)]);
 
@@ -404,7 +441,7 @@ class BackupStorageManagerTest extends TestCase
     public function unbundle_correctly_maps_database_and_storage_components(): void
     {
         // Create fake component files
-        $dbFile      = $this->manager->tmpPath('landlord_1_db.sql.gz');
+        $dbFile = $this->manager->tmpPath('landlord_1_db.sql.gz');
         $storageFile = $this->manager->tmpPath('landlord_1_storage.tar.gz');
 
         file_put_contents($dbFile, gzencode('-- SQL'));
