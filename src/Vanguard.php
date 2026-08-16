@@ -3,7 +3,7 @@
 namespace SoftArtisan\Vanguard;
 
 use Closure;
-use Illuminate\Contracts\Auth\Authenticatable;
+use Illuminate\Http\Request;
 
 class Vanguard
 {
@@ -19,10 +19,13 @@ class Vanguard
 
     /**
      * The callback used to authenticate Vanguard users.
-     *
-     * @var Closure|null
      */
     public static ?Closure $authUsing = null;
+
+    /**
+     * The callback used to name the operator behind a restore.
+     */
+    public static ?Closure $restoreActorUsing = null;
 
     /**
      * Get or set the Vanguard dashboard path.
@@ -31,7 +34,7 @@ class Vanguard
      * When called with a path, updates the config and returns the instance for chaining.
      *
      * @param  string|null  $path  Dashboard URL prefix (e.g. 'admin/backups')
-     * @return string|static       Current path string when reading; static instance when writing
+     * @return string|static Current path string when reading; static instance when writing
      */
     public static function path(?string $path = null): string|static
     {
@@ -39,6 +42,7 @@ class Vanguard
             return config('vanguard.path', 'vanguard');
         }
         config(['vanguard.path' => $path]);
+
         return new static;
     }
 
@@ -46,11 +50,11 @@ class Vanguard
      * Configure the Vanguard dashboard domain.
      *
      * @param  string  $domain  Fully-qualified domain (e.g. 'tools.acme.com')
-     * @return static
      */
     public static function domain(string $domain): static
     {
         config(['vanguard.domain' => $domain]);
+
         return new static;
     }
 
@@ -61,12 +65,38 @@ class Vanguard
      *   Vanguard::auth(fn ($request) => auth()->check());
      *
      * @param  Closure  $callback  Receives an Illuminate\Http\Request; return true to grant access
-     * @return static
      */
     public static function auth(Closure $callback): static
     {
         static::$authUsing = $callback;
+
         return new static;
+    }
+
+    /**
+     * Set the callback that names the operator behind a restore.
+     *
+     * The package cannot presume the host application's user model — an ops
+     * guard, an API token, a console operator — so the application decides
+     * what identifies the person who asked.
+     */
+    public static function restoreActor(Closure $callback): static
+    {
+        static::$restoreActorUsing = $callback;
+
+        return new static;
+    }
+
+    /**
+     * Resolve who is acting, or null when nobody can be named.
+     */
+    public static function actor(): ?string
+    {
+        $actor = static::$restoreActorUsing
+            ? call_user_func(static::$restoreActorUsing)
+            : auth()->user()?->getAuthIdentifier();
+
+        return $actor === null ? null : (string) $actor;
     }
 
     /**
@@ -74,11 +104,8 @@ class Vanguard
      *
      * Delegates to the $authUsing callback if set, otherwise falls back to
      * checking that a user is authenticated.
-     *
-     * @param  \Illuminate\Http\Request  $request
-     * @return bool
      */
-    public static function check(\Illuminate\Http\Request $request): bool
+    public static function check(Request $request): bool
     {
         return (static::$authUsing ?? fn ($req) => $req->user() !== null)($request);
     }
@@ -87,12 +114,11 @@ class Vanguard
      * Prevent Vanguard from registering its default routes.
      *
      * Use this when you want to define the routes manually in your application.
-     *
-     * @return static
      */
     public static function ignoreRoutes(): static
     {
         static::$registersRoutes = false;
+
         return new static;
     }
 
@@ -100,12 +126,11 @@ class Vanguard
      * Prevent Vanguard from running its migrations automatically.
      *
      * Use this when you publish and manage migrations yourself.
-     *
-     * @return static
      */
     public static function ignoreMigrations(): static
     {
         static::$runsMigrations = false;
+
         return new static;
     }
 
@@ -121,7 +146,6 @@ class Vanguard
      *     browser-cached via ETag for the lifetime of the installed version).
      *
      * @param  string  $file  'vanguard.js' or 'vanguard.css'
-     * @return string
      */
     public static function assetUrl(string $file): string
     {
