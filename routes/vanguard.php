@@ -4,6 +4,7 @@ use Illuminate\Support\Facades\Route;
 use SoftArtisan\Vanguard\Http\Controllers\AssetsController;
 use SoftArtisan\Vanguard\Http\Controllers\BackupsApiController;
 use SoftArtisan\Vanguard\Http\Controllers\DashboardController;
+use SoftArtisan\Vanguard\Http\Controllers\HealthController;
 use SoftArtisan\Vanguard\Http\Controllers\MaintenanceApiController;
 use SoftArtisan\Vanguard\Http\Controllers\RestoresApiController;
 use SoftArtisan\Vanguard\Http\Controllers\SseController;
@@ -58,6 +59,13 @@ Route::middleware([VanguardAuthenticate::class])->group(function () {
         Route::post('/cleanup-tmp', [MaintenanceApiController::class, 'cleanupTmp'])
             ->middleware('throttle:vanguard.run')
             ->name('cleanup-tmp');
+
+        // Health — a read, but one that writes and deletes an object on every
+        // enabled destination. Limited with the heavy operations so an open
+        // dashboard tab cannot hammer the bucket once a second.
+        Route::get('/health', [HealthController::class, 'show'])
+            ->middleware('throttle:vanguard.run')
+            ->name('health');
     });
 
     // ─── Dashboard SPA — catch-all EN DERNIER ────────────────────
