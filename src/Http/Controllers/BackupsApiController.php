@@ -518,6 +518,10 @@ class BackupsApiController extends Controller
             'checksum' => $r->checksum,
             'destinations' => $r->destinations,
             'ftp_path' => $r->ftp_path,
+            // A backup that archived no file at all. Without it a list of
+            // green rows is exactly what an operator whose tenant is
+            // unprotected sees — see BackupManager::archiveStorage().
+            'filesystem_empty' => (bool) (is_array($r->meta) ? ($r->meta['filesystem_empty'] ?? false) : false),
             'error' => $r->error,
             'started_at' => $r->started_at?->toIso8601String(),
             'completed_at' => $r->completed_at?->toIso8601String(),

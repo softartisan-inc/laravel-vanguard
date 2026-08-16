@@ -177,8 +177,7 @@ class RestoreService
         }
 
         if ($fs && isset($components['storage'])) {
-            $this->announce($onPhase, 'restoring files');
-            $this->extractStorage($components['storage'], $wipe);
+            $this->extractStorage($components['storage'], $wipe, $onPhase);
             Log::info('[Vanguard] Landlord filesystem restored', ['record_id' => $record->id]);
         }
 
@@ -307,8 +306,7 @@ class RestoreService
             }
 
             if ($fs && isset($components['storage'])) {
-                $this->announce($onPhase, 'restoring files');
-                $this->extractStorage($components['storage'], $wipe);
+                $this->extractStorage($components['storage'], $wipe, $onPhase);
                 Log::info('[Vanguard] Tenant filesystem restored', ['tenant' => $record->tenant_id]);
             }
         } finally {
@@ -331,8 +329,7 @@ class RestoreService
     protected function restoreFilesystem(array $components, bool $wipe = false, ?callable $onPhase = null): bool
     {
         if (isset($components['storage'])) {
-            $this->announce($onPhase, 'restoring files');
-            $this->extractStorage($components['storage'], $wipe);
+            $this->extractStorage($components['storage'], $wipe, $onPhase);
         }
 
         return true;
@@ -346,12 +343,37 @@ class RestoreService
      * The extraction itself never wipes: StorageDriver::extract() would delete
      * the whole destination, and the destination here is storage_path().
      *
+     * A member holding no file at all is said out loud before anything is
+     * extracted — in the log, and in the phase context so the console and the
+     * restore history can carry it. Restoring nothing and answering "Restore
+     * completed successfully" is the mirror image of the empty backup this
+     * release also fixes, and it is the more expensive half: the operator is
+     * standing in front of an incident believing their files came back.
+     *
      * @param  string  $source  Absolute path to the storage archive
      * @param  bool  $wipe  Whether to erase the backed-up paths first
+     * @param  callable|null  $onPhase  Receives (string $phase, array $context)
      */
-    protected function extractStorage(string $source, bool $wipe): void
+    protected function extractStorage(string $source, bool $wipe, ?callable $onPhase = null): void
     {
-        if ($wipe) {
+        $empty = $this->storage->isEmptyArchive($source);
+
+        $this->announce($onPhase, 'restoring files', ['empty' => $empty]);
+
+        if ($empty) {
+            Log::warning('[Vanguard] The filesystem member of this backup holds no file: nothing will be restored from it', [
+                'archive' => $source,
+                'storage_root' => rtrim(storage_path(), DIRECTORY_SEPARATOR),
+                // Replace mode is refused rather than obeyed here: erasing the
+                // live directories to replace them with an empty archive is
+                // never what the operator meant, and it is exactly the
+                // destruction an archive taken before the empty-backup fix
+                // would cause.
+                'wipe_refused' => $wipe,
+            ]);
+        }
+
+        if ($wipe && ! $empty) {
             $this->wipeBackedUpPaths();
         }
 

@@ -43,6 +43,7 @@ class BackupManager
         $this->assertSufficientDiskSpace();
 
         $record = $this->createRecord(null, 'landlord', $options);
+        $emptyFilesystem = null;
 
         try {
             event(new BackupStarted($record));
@@ -62,12 +63,13 @@ class BackupManager
 
             // Filesystem
             if (config('vanguard.sources.filesystem', true) && ($options['include_filesystem'] ?? true)) {
-                $files['storage'] = $this->storage->archive(
-                    paths: $this->storage->resolveBackupPaths(),
-                    exclude: $this->storage->resolveExcludePaths(),
-                    destination: $this->store->tmpPath("{$name}_fs.tar.gz"),
+                $files['storage'] = $this->archiveStorage(
+                    $this->store->tmpPath("{$name}_fs.tar.gz"),
+                    $emptyFilesystem,
                 );
             }
+
+            $this->reportEmptyFilesystem($record, $emptyFilesystem);
 
             $bundle = $this->store->bundle($files, $name);
             $this->completeRecord($record, $bundle);
@@ -104,11 +106,12 @@ class BackupManager
 
         $tenantId = $tenant->getTenantKey();
         $record = $this->createRecord($tenantId, 'tenant', $options);
+        $emptyFilesystem = null;
 
         try {
             event(new BackupStarted($record));
 
-            $this->tenancy->runForTenant($tenant, function () use ($tenant, $record, $options, &$files, &$name) {
+            $this->tenancy->runForTenant($tenant, function () use ($tenant, $record, $options, &$files, &$name, &$emptyFilesystem) {
                 $files = [];
                 $name = "tenant_{$tenant->getTenantKey()}_{$record->id}_".now()->format('Ymd_His');
 
@@ -124,13 +127,21 @@ class BackupManager
 
                 // Tenant storage (if tenant has its own storage disk)
                 if (config('vanguard.sources.filesystem', true) && ($options['include_filesystem'] ?? false)) {
-                    $files['storage'] = $this->storage->archive(
-                        paths: $this->storage->resolveBackupPaths(),
-                        exclude: $this->storage->resolveExcludePaths(),
-                        destination: $this->store->tmpPath("{$name}_fs.tar.gz"),
+                    // Resolved inside the tenancy window on purpose:
+                    // stancl/tenancy has swapped storage_path() to the
+                    // tenant's own root, which is the root the diagnosis has
+                    // to name.
+                    $files['storage'] = $this->archiveStorage(
+                        $this->store->tmpPath("{$name}_fs.tar.gz"),
+                        $emptyFilesystem,
                     );
                 }
             });
+
+            // Outside the window: the record lives in the central database,
+            // and writing it while the connection is swapped would look for
+            // vanguard_backups in the tenant's own.
+            $this->reportEmptyFilesystem($record, $emptyFilesystem);
 
             $bundle = $this->store->bundle($files, $name);
             $this->completeRecord($record, $bundle);
@@ -163,17 +174,19 @@ class BackupManager
         $this->assertSufficientDiskSpace();
 
         $record = $this->createRecord(null, 'filesystem', $options);
+        $emptyFilesystem = null;
 
         try {
             event(new BackupStarted($record));
 
             $name = "filesystem_{$record->id}_".now()->format('Ymd_His');
 
-            $files['storage'] = $this->storage->archive(
-                paths: $this->storage->resolveBackupPaths(),
-                exclude: $this->storage->resolveExcludePaths(),
-                destination: $this->store->tmpPath("{$name}_fs.tar.gz"),
+            $files['storage'] = $this->archiveStorage(
+                $this->store->tmpPath("{$name}_fs.tar.gz"),
+                $emptyFilesystem,
             );
+
+            $this->reportEmptyFilesystem($record, $emptyFilesystem);
 
             $bundle = $this->store->bundle($files, $name);
             $this->completeRecord($record, $bundle);
@@ -233,6 +246,97 @@ class BackupManager
     // ─────────────────────────────────────────────────────────────
     // HELPERS
     // ─────────────────────────────────────────────────────────────
+
+    /**
+     * Archive the configured filesystem paths, and never do it silently when
+     * there is nothing to archive.
+     *
+     * A backup asked for the filesystem whose paths all resolve to nothing
+     * produces a valid, tiny, *empty* tarball. Observed for real on a preprod
+     * tenant: `vanguard.sources.filesystem_paths` is ['app'], stancl/tenancy
+     * swaps storage_path() to the tenant's own root for the duration of the
+     * backup, and that root had no 'app' directory — so nothing was archived,
+     * and nothing anywhere said so. An archive that looks healthy, weighs
+     * almost nothing and restores nothing is the failure this package exists
+     * to abolish; a tenant whose storage layout does not match the
+     * configuration is invisibly unprotected, and the health screen's
+     * freshness goes green on it.
+     *
+     * The emptiness is handed back rather than recorded here: this runs inside
+     * the tenancy window for a tenant backup, where the database connection is
+     * the tenant's own and Vanguard's tables are not.
+     *
+     * @param  string  $destination  Absolute path for the output .tar.gz
+     * @param  array|null  $empty  Set to the diagnosis when nothing resolved
+     * @return string Path to the created archive
+     *
+     * @throws RuntimeException When on_empty_filesystem is 'fail'
+     */
+    protected function archiveStorage(string $destination, ?array &$empty): string
+    {
+        $paths = $this->storage->resolveBackupPaths();
+
+        if ($paths === []) {
+            $empty = [
+                'configured_paths' => array_values(array_map(
+                    fn ($path) => (string) $path,
+                    (array) config('vanguard.sources.filesystem_paths', ['app']),
+                )),
+                'storage_root' => rtrim(storage_path(), DIRECTORY_SEPARATOR),
+            ];
+
+            // Deliberately not the default: a landlord installation that
+            // genuinely keeps no file under storage/app is legitimate, and
+            // turning a working setup into a failing one on upgrade would be
+            // worse than the silence being fixed here.
+            if (strtolower((string) config('vanguard.sources.on_empty_filesystem', 'warn')) === 'fail') {
+                throw new RuntimeException(sprintf(
+                    '[Vanguard] The filesystem backup resolved no existing path under [%s]. '
+                    .'Configured: [%s]. Check vanguard.sources.filesystem_paths against this target\'s storage layout.',
+                    $empty['storage_root'],
+                    implode(', ', $empty['configured_paths']),
+                ));
+            }
+        }
+
+        return $this->storage->archive(
+            paths: $paths,
+            exclude: $this->storage->resolveExcludePaths(),
+            destination: $destination,
+        );
+    }
+
+    /**
+     * Say — in the log and on the record — that this archive carries no file.
+     *
+     * The record is where it matters: an operator reads a list of green rows,
+     * not a log file, and the dashboard and the API can only report what the
+     * row holds.
+     *
+     * @param  array|null  $diagnosis  Null when the filesystem was not empty,
+     *                                 or was never asked for
+     */
+    protected function reportEmptyFilesystem(BackupRecord $record, ?array $diagnosis): void
+    {
+        if ($diagnosis === null) {
+            return;
+        }
+
+        Log::warning('[Vanguard] The filesystem backup resolved no existing path: this archive carries no file', [
+            'record_id' => $record->id,
+            'target' => $record->tenant_id !== null ? "tenant [{$record->tenant_id}]" : $record->type,
+            'configured_paths' => $diagnosis['configured_paths'],
+            'storage_root' => $diagnosis['storage_root'],
+        ]);
+
+        $record->meta = array_merge((array) $record->meta, [
+            'filesystem_empty' => true,
+            'filesystem_paths' => $diagnosis['configured_paths'],
+            'storage_root' => $diagnosis['storage_root'],
+        ]);
+
+        $record->save();
+    }
 
     /**
      * Ensure there is at least 100 MB of free space in the tmp directory before starting a backup.

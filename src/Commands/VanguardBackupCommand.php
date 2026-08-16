@@ -160,13 +160,41 @@ class VanguardBackupCommand extends Command
      */
     protected function printResult(mixed $record): void
     {
-        if ($record->isCompleted()) {
-            $this->info("  ✅ Completed in {$record->duration}");
-            $this->line("     Size     : {$record->file_size_human}");
-            $this->line("     Path     : {$record->file_path}");
-            $this->line("     Checksum : {$record->checksum}");
-        } else {
+        if (! $record->isCompleted()) {
             $this->error("  ✗ Backup failed: {$record->error}");
+
+            return;
         }
+
+        $this->info("  ✅ Completed in {$record->duration}");
+        $this->line("     Size     : {$record->file_size_human}");
+        $this->line("     Path     : {$record->file_path}");
+        $this->line("     Checksum : {$record->checksum}");
+        $this->printEmptyFilesystemWarning($record);
+    }
+
+    /**
+     * Say on the console that the archive carries no file.
+     *
+     * The record is marked by BackupManager when a backup asked for the
+     * filesystem resolved none of its configured paths; without this line the
+     * command prints a green "Completed" over an archive that restores
+     * nothing.
+     *
+     * @param  mixed  $record  A BackupRecord instance
+     */
+    protected function printEmptyFilesystemWarning(mixed $record): void
+    {
+        $meta = is_array($record->meta) ? $record->meta : [];
+
+        if (! ($meta['filesystem_empty'] ?? false)) {
+            return;
+        }
+
+        $this->newLine();
+        $this->warn('  ⚠️  This archive carries no file: the filesystem backup resolved no existing path.');
+        $this->warn('     Storage root : '.($meta['storage_root'] ?? 'unknown'));
+        $this->warn('     Configured   : ['.implode(', ', (array) ($meta['filesystem_paths'] ?? [])).']');
+        $this->warn('     Check vanguard.sources.filesystem_paths against this target\'s storage layout.');
     }
 }

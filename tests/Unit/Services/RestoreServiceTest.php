@@ -34,6 +34,11 @@ class RestoreServiceTest extends TestCase
 
         $this->store->shouldReceive('cleanTmp')->byDefault()->andReturnNull();
 
+        // The storage restore now asks whether the archive holds any file at
+        // all before extracting it; these cases are about the paths around
+        // that question, and are pinned in EmptyStorageRestoreTest.
+        $this->storage->shouldReceive('isEmptyArchive')->byDefault()->andReturnFalse();
+
         $this->restoreService = new RestoreService(
             $this->db,
             $this->storage,

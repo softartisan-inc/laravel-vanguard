@@ -161,6 +161,8 @@ class VanguardInstallCommand extends Command
         $this->line('     <comment>VANGUARD_RETENTION_DAYS=30</comment>');
         $this->line('     <comment># Keep a copy on the server itself (default true):</comment>');
         $this->line('     <comment>VANGUARD_LOCAL_ENABLED=true</comment>');
+        $this->line('     <comment># An archive that captured no file: warn (default) or fail the backup:</comment>');
+        $this->line('     <comment>VANGUARD_ON_EMPTY_FILESYSTEM=warn</comment>');
         $this->line('     <comment># Alerts — without an address a failing backup stays silent:</comment>');
         $this->line('     <comment>VANGUARD_NOTIFY_FAILURE=true</comment>');
         $this->line('     <comment>VANGUARD_NOTIFY_MAIL=ops@example.com</comment>');

@@ -122,6 +122,33 @@ VANGUARD_MYSQL_DUMP_OPTIONS="--single-transaction --quick --routines --triggers 
 
 These options apply to the `mysqldump` binary only. When the binary is missing, the PDO fallback takes over: it reads every table with buffering off and writes batched multi-row `INSERT`s, so a large table is never loaded into PHP memory.
 
+### An archive that captured no file
+
+`sources.filesystem_paths` is relative to `storage_path()`, and under
+`stancl/tenancy` `storage_path()` is the *tenant's* own root for the duration
+of its backup. A tenant whose root has no `app/` directory therefore matched
+none of the configured paths, and the backup produced a valid, tiny, empty
+tarball while the command printed `✅ Completed`.
+
+That case is now named — in the log, on the console, and on the backup record
+(`meta.filesystem_empty`, which the API returns as `filesystem_empty`) so a
+list of green rows cannot hide it:
+
+```dotenv
+# warn (default): complete the backup, but say the archive carries no file
+# fail: refuse the backup instead
+VANGUARD_ON_EMPTY_FILESYSTEM=warn
+```
+
+The default stays `warn` because an installation that genuinely keeps nothing
+under `storage/app` is legitimate. Set `fail` where an empty filesystem archive
+can only mean a misconfiguration.
+
+The restore side says it too: extracting a filesystem member that holds no file
+warns instead of reporting a successful restore of nothing, and `--wipe-storage`
+is *refused* in that case — erasing your directories to replace them with an
+empty archive is not a restore.
+
 ---
 
 ## Notifications

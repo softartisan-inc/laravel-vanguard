@@ -103,6 +103,7 @@ class VanguardRestoreCommand extends Command
                 'wipe_storage' => $wipeStorage,
                 'source' => $this->option('source') ?: null,
                 'database' => $targetDatabase,
+                'on_phase' => fn (string $phase, array $context = []) => $this->printPhase($phase, $context),
             ]);
 
             $this->info($targetDatabase !== null
@@ -114,6 +115,29 @@ class VanguardRestoreCommand extends Command
             $this->error('✗ Restore failed: '.$e->getMessage());
 
             return self::FAILURE;
+        }
+    }
+
+    /**
+     * Print the phase a restore has reached.
+     *
+     * A restore of a large target runs for minutes with nothing on screen; and
+     * the storage phase is where the console learns that the filesystem member
+     * of the archive holds no file — a restore that puts nothing back must not
+     * end on "Restore completed successfully" alone.
+     *
+     * @param  array  $context  Phase context; 'empty' is set on the storage phase
+     */
+    protected function printPhase(string $phase, array $context = []): void
+    {
+        $this->line("  → {$phase}");
+
+        if ($phase === 'restoring files' && ($context['empty'] ?? false)) {
+            $this->warn('  ⚠️  The filesystem member of this backup holds no file: nothing will be restored from it.');
+
+            if ($this->option('wipe-storage')) {
+                $this->warn('     --wipe-storage was refused: erasing your files to replace them with an empty archive is not a restore.');
+            }
         }
     }
 

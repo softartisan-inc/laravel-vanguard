@@ -276,15 +276,35 @@ class StorageDriver
      * Member names held by a .tar.gz archive.
      *
      * A listing failure is not raised here: the extraction that follows reports
-     * the real error with its own message.
+     * the real error with its own message. Callers that need to tell "listed,
+     * and holds nothing" from "could not be listed" read $exitCode.
      *
+     * @param  int|null  $exitCode  Receives tar's exit code
      * @return array<string>
      */
-    protected function members(string $source): array
+    protected function members(string $source, ?int &$exitCode = null): array
     {
         exec(sprintf('tar tzf %s 2>/dev/null', escapeshellarg($source)), $output, $exitCode);
 
         return $exitCode === 0 ? $output : [];
+    }
+
+    /**
+     * Whether an archive was read successfully and holds no member at all.
+     *
+     * This is the restore-side half of the empty-archive problem: extracting a
+     * filesystem member that contains no file puts nothing back, and used to
+     * be reported as a successful restore. An archive that cannot be listed is
+     * *not* reported as empty — unreadable is a different claim, and the
+     * extraction that follows fails with the real error.
+     *
+     * @param  string  $source  Absolute path to the .tar.gz file
+     */
+    public function isEmptyArchive(string $source): bool
+    {
+        $members = $this->members($source, $exitCode);
+
+        return $exitCode === 0 && $members === [];
     }
 
     /**

@@ -59,6 +59,23 @@ return [
             'logs',
             'framework',
         ],
+
+        /*
+        | What to do when a backup was asked for the filesystem and not one of
+        | the paths above exists — the tenant whose storage root has no 'app'
+        | directory, the entry configured for a sibling installation. The
+        | archive is then a valid, tiny, empty tarball, and it used to be
+        | reported as a success.
+        |
+        | 'warn' (default) logs the tenant, the configured paths and the
+        |        resolved storage root, tells the console, and marks the backup
+        |        record so the dashboard and the API can say the archive
+        |        carries no file. The backup still completes: an installation
+        |        that genuinely keeps nothing under storage/app is legitimate.
+        | 'fail' refuses the backup instead. Set it on an installation where an
+        |        empty filesystem archive can only mean a misconfiguration.
+        */
+        'on_empty_filesystem' => env('VANGUARD_ON_EMPTY_FILESYSTEM', 'warn'),
     ],
 
     /*
