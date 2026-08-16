@@ -5,6 +5,7 @@ namespace SoftArtisan\Vanguard\Services;
 use Illuminate\Support\Facades\Storage;
 use RuntimeException;
 use SoftArtisan\Vanguard\Models\BackupRecord;
+use SoftArtisan\Vanguard\Vanguard;
 
 class BackupStorageManager
 {
@@ -411,7 +412,11 @@ class BackupStorageManager
         $days = config('vanguard.retention.days', 30);
         $cutoff = now()->subDays($days);
 
-        $query = BackupRecord::completed()
+        // Pinned rather than left to database.default: this runs from the
+        // scheduler and from the dashboard, and a worker whose default was
+        // swapped by a tenancy window would prune against a database where
+        // the catalogue does not exist.
+        $query = BackupRecord::on(Vanguard::centralConnection())->completed()
             ->where('created_at', '<', $cutoff);
 
         if ($tenantId !== null) {

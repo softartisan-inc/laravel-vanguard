@@ -37,13 +37,15 @@ class BackupsApiController extends Controller
      */
     public function stats(): JsonResponse
     {
-        $totalTenants = $this->tenancy->isEnabled() ? $this->tenancy->allTenants()->count() : 0;
-        $totalBackups = BackupRecord::count();
-        $runningBackups = BackupRecord::running()->count();
-        $failedBackups = BackupRecord::failed()->where('created_at', '>=', now()->subDay())->count();
-        $totalSize = BackupRecord::completed()->sum('file_size');
+        $central = Vanguard::centralConnection();
 
-        $recentBackups = BackupRecord::latest()
+        $totalTenants = $this->tenancy->isEnabled() ? $this->tenancy->allTenants()->count() : 0;
+        $totalBackups = BackupRecord::on($central)->count();
+        $runningBackups = BackupRecord::on($central)->running()->count();
+        $failedBackups = BackupRecord::on($central)->failed()->where('created_at', '>=', now()->subDay())->count();
+        $totalSize = BackupRecord::on($central)->completed()->sum('file_size');
+
+        $recentBackups = BackupRecord::on($central)->latest()
             ->limit(10)
             ->get()
             ->map(fn ($r) => $this->formatRecord($r));
@@ -74,7 +76,7 @@ class BackupsApiController extends Controller
             'per_page' => 'nullable|integer|min:1|max:100',
         ]);
 
-        $query = BackupRecord::latest();
+        $query = BackupRecord::on(Vanguard::centralConnection())->latest();
 
         if ($tenantId = $request->get('tenant_id')) {
             $query->forTenant($tenantId);
@@ -113,6 +115,8 @@ class BackupsApiController extends Controller
             return response()->json(['tenants' => []]);
         }
 
+        $central = Vanguard::centralConnection();
+
         $all = $this->tenancy->allTenants();
         $keys = $all->map(fn ($tenant) => (string) $tenant->getTenantKey())->all();
 
@@ -122,14 +126,14 @@ class BackupsApiController extends Controller
         // list — MAX(id) stands in for "the latest" because ids are handed out
         // in creation order and two records created in the same second have no
         // other ordering to offer.
-        $stats = BackupRecord::query()
+        $stats = BackupRecord::on($central)
             ->selectRaw('tenant_id, COUNT(*) as total, MAX(id) as latest_id')
             ->whereIn('tenant_id', $keys)
             ->groupBy('tenant_id')
             ->get()
             ->keyBy('tenant_id');
 
-        $latest = BackupRecord::query()
+        $latest = BackupRecord::on($central)
             ->whereIn('id', $stats->pluck('latest_id')->all())
             ->get()
             ->keyBy('id');
@@ -262,7 +266,7 @@ class BackupsApiController extends Controller
      */
     public function destroy(int $id): JsonResponse
     {
-        $record = BackupRecord::findOrFail($id);
+        $record = BackupRecord::on(Vanguard::centralConnection())->findOrFail($id);
 
         try {
             if ($record->file_path) {

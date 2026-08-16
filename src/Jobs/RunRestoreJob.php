@@ -14,6 +14,7 @@ use SoftArtisan\Vanguard\Events\RestoreStarted;
 use SoftArtisan\Vanguard\Models\BackupRecord;
 use SoftArtisan\Vanguard\Models\RestoreRecord;
 use SoftArtisan\Vanguard\Services\RestoreService;
+use SoftArtisan\Vanguard\Vanguard;
 
 /**
  * Runs a restore off the queue, keeping its history row current.
@@ -52,7 +53,12 @@ class RunRestoreJob implements ShouldQueue
         // Never hardcode 'central' — on this product's production installs
         // central_connection resolves to 'mysql', and hardcoding the literal
         // string has already shipped as a bug three times in a sibling package.
-        $central = config('tenancy.database.central_connection', config('database.default'));
+        // Resolved through Vanguard::centralConnection(), which is the one
+        // place that knows the rule: config(key, default) answers null for a
+        // key that is present but null, and RestoreRecord::on(null) then
+        // re-resolves database.default at query time — from inside the tenancy
+        // window, where the swap is guaranteed to be active.
+        $central = Vanguard::centralConnection();
 
         $restore = RestoreRecord::on($central)->find($this->restoreId);
 
@@ -138,7 +144,7 @@ class RunRestoreJob implements ShouldQueue
      */
     public function failed(\Throwable $e): void
     {
-        $central = config('tenancy.database.central_connection', config('database.default'));
+        $central = Vanguard::centralConnection();
 
         $restore = RestoreRecord::on($central)->find($this->restoreId);
 
