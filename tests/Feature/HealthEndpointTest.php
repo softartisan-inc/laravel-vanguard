@@ -256,4 +256,24 @@ class HealthEndpointTest extends TestCase
 
         $this->assertTrue($landlord['stale'], 'a backup that failed backed nothing up');
     }
+
+    #[Test]
+    public function a_broken_central_connection_degrades_freshness_without_taking_down_the_endpoint(): void
+    {
+        // The central database being unreachable is exactly the outage this
+        // page exists to surface, and one that plausibly co-occurs with a
+        // broken backup pipeline. The endpoint must still answer 200 with
+        // everything that did not depend on it.
+        config(['tenancy.database.central_connection' => 'vanguard-missing-connection']);
+
+        $response = $this->getJson('/vanguard/api/health')->assertOk();
+
+        $this->assertSame('absent', $response->json('alerts.mail'));
+        $this->assertSame(true, $response->json('alerts.on_failure'));
+        $this->assertFalse($response->json('schedule.alive'));
+        $this->assertNull($response->json('schedule.last_seen_at'));
+
+        $this->assertIsArray($response->json('freshness.targets'));
+        $this->assertNotEmpty($response->json('freshness.reason'));
+    }
 }

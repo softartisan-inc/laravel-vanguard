@@ -202,6 +202,13 @@ class HealthController extends Controller
      * The only indicator on this screen that turns red on its own when
      * nothing runs at all — every other one describes an intention.
      *
+     * Nothing here is allowed to take the rest of the payload down with it:
+     * a central database that cannot be reached is exactly the outage this
+     * page exists to surface, and it plausibly co-occurs with a broken
+     * backup pipeline. The tenant enumeration and the per-target reads are
+     * each guarded on their own, so a tenancy failure still leaves the
+     * landlord row readable rather than emptying the whole section.
+     *
      * @return array<string, mixed>
      */
     protected function freshness(): array
@@ -210,47 +217,64 @@ class HealthController extends Controller
         $central = Vanguard::centralConnection();
 
         $targets = [['id' => null, 'label' => 'landlord']];
+        $reason = null;
 
-        if ($this->tenancy->isEnabled()) {
-            foreach ($this->tenancy->allTenants() as $tenant) {
-                $key = (string) $tenant->getTenantKey();
-                $targets[] = ['id' => $key, 'label' => $key];
+        try {
+            if ($this->tenancy->isEnabled()) {
+                foreach ($this->tenancy->allTenants() as $tenant) {
+                    $key = (string) $tenant->getTenantKey();
+                    $targets[] = ['id' => $key, 'label' => $key];
+                }
             }
+        } catch (\Throwable $e) {
+            // A tenancy failure should not cost us the landlord row: fall
+            // back to it alone and report why the tenant list could not be
+            // read.
+            $targets = [['id' => null, 'label' => 'landlord']];
+            $reason = $e->getMessage();
         }
 
         $rows = [];
 
         foreach ($targets as $target) {
-            $query = BackupRecord::on($central)->completed();
+            try {
+                $query = BackupRecord::on($central)->completed();
 
-            if ($target['id'] === null) {
-                $query->whereNull('tenant_id');
-            } else {
-                $query->forTenant($target['id']);
+                if ($target['id'] === null) {
+                    $query->whereNull('tenant_id');
+                } else {
+                    $query->forTenant($target['id']);
+                }
+
+                $latest = $query->orderByDesc('completed_at')->first();
+
+                $age = $latest?->completed_at
+                    ? (int) now()->diffInSeconds($latest->completed_at, true)
+                    : null;
+
+                $rows[] = [
+                    'target' => $target['label'],
+                    'tenant_id' => $target['id'],
+                    'last_success_at' => $latest?->completed_at?->toIso8601String(),
+                    'age_seconds' => $age,
+                    // Twice the interval, not once, so a run that slipped or a
+                    // backup that took an hour raises no false alarm. Never
+                    // backed up counts as stale: it is the worse case, not the
+                    // unknown one.
+                    'stale' => $age === null || $age > $threshold,
+                ];
+            } catch (\Throwable $e) {
+                // Unreadable, not absent: a row we could not read is dropped
+                // from the list rather than faked, and the reason travels up
+                // so the page still says why instead of just going blank.
+                $reason = $e->getMessage();
             }
-
-            $latest = $query->orderByDesc('completed_at')->first();
-
-            $age = $latest?->completed_at
-                ? (int) now()->diffInSeconds($latest->completed_at, true)
-                : null;
-
-            $rows[] = [
-                'target' => $target['label'],
-                'tenant_id' => $target['id'],
-                'last_success_at' => $latest?->completed_at?->toIso8601String(),
-                'age_seconds' => $age,
-                // Twice the interval, not once, so a run that slipped or a
-                // backup that took an hour raises no false alarm. Never
-                // backed up counts as stale: it is the worse case, not the
-                // unknown one.
-                'stale' => $age === null || $age > $threshold,
-            ];
         }
 
         return [
             'threshold_seconds' => $threshold,
             'targets' => $rows,
+            'reason' => $reason,
         ];
     }
 }
