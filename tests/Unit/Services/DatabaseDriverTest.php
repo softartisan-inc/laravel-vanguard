@@ -10,6 +10,7 @@ use SoftArtisan\Vanguard\Tests\TestCase;
 class DatabaseDriverTest extends TestCase
 {
     private DatabaseDriver $driver;
+
     private string $tmpDir;
 
     protected function setUp(): void
@@ -120,7 +121,7 @@ class DatabaseDriverTest extends TestCase
         unset($pdo);
 
         // Pass .sql instead of .sql.gz — driver should normalize
-        $dest   = $this->tmpDir.'/out.sql';
+        $dest = $this->tmpDir.'/out.sql';
         $result = $this->driver->dump('sqlite', ['database' => $sqliteFile], $dest);
 
         $this->assertStringEndsWith('.sql.gz', $result);
@@ -135,7 +136,7 @@ class DatabaseDriverTest extends TestCase
         $pdo->exec('CREATE TABLE t (id INTEGER PRIMARY KEY)');
         unset($pdo);
 
-        $dest   = $this->tmpDir.'/out';
+        $dest = $this->tmpDir.'/out';
         $result = $this->driver->dump('sqlite', ['database' => $sqliteFile], $dest);
 
         $this->assertStringEndsWith('.sql.gz', $result);
@@ -153,8 +154,8 @@ class DatabaseDriverTest extends TestCase
         $reflection->setAccessible(true);
 
         $args = $reflection->invoke($this->driver, [
-            'host'     => '127.0.0.1',
-            'port'     => 3306,
+            'host' => '127.0.0.1',
+            'port' => 3306,
             'username' => 'root',
             'password' => '',
         ]);
@@ -162,7 +163,10 @@ class DatabaseDriverTest extends TestCase
         $this->assertStringContainsString('127.0.0.1', $args);
         $this->assertStringContainsString('3306', $args);
         $this->assertStringContainsString('root', $args);
-        $this->assertStringContainsString('--single-transaction', $args);
+
+        // These arguments feed the mysql client on restore, which rejects the
+        // mysqldump flags this method used to append.
+        $this->assertStringNotContainsString('--single-transaction', $args);
     }
 
     #[Test]
@@ -172,9 +176,9 @@ class DatabaseDriverTest extends TestCase
         $reflection->setAccessible(true);
 
         $args = $reflection->invoke($this->driver, [
-            'host'        => '127.0.0.1',
-            'port'        => 3306,
-            'username'    => 'root',
+            'host' => '127.0.0.1',
+            'port' => 3306,
+            'username' => 'root',
             'unix_socket' => '/var/run/mysql.sock',
         ]);
 

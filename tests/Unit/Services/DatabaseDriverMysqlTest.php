@@ -47,8 +47,8 @@ class DatabaseDriverMysqlTest extends TestCase
     private function mysqlConfig(): array
     {
         return [
-            'host'     => '127.0.0.1',
-            'port'     => 3306,
+            'host' => '127.0.0.1',
+            'port' => 3306,
             'database' => 'shop',
             'username' => 'root',
             'password' => 'secret',
@@ -64,7 +64,7 @@ class DatabaseDriverMysqlTest extends TestCase
     {
         config()->set('vanguard.binaries.mysqldump', '/bin/false');
 
-        $dest      = $this->tmpDir.'/failing.sql.gz';
+        $dest = $this->tmpDir.'/failing.sql.gz';
         $exception = null;
 
         try {
@@ -91,7 +91,7 @@ class DatabaseDriverMysqlTest extends TestCase
 
         config()->set('vanguard.binaries.mysqldump', $binary);
 
-        $dest      = $this->tmpDir.'/denied.sql.gz';
+        $dest = $this->tmpDir.'/denied.sql.gz';
         $exception = null;
 
         try {
@@ -188,7 +188,7 @@ class DatabaseDriverMysqlTest extends TestCase
     #[Test]
     public function the_built_mysqldump_command_carries_the_default_options(): void
     {
-        $driver  = new ExposedDatabaseDriver;
+        $driver = new ExposedDatabaseDriver;
         $command = implode(' ', $driver->buildMysqlDumpCommand('/usr/bin/mysqldump', $this->mysqlConfig()));
 
         $this->assertStringContainsString('--single-transaction', $command);
@@ -212,7 +212,7 @@ class DatabaseDriverMysqlTest extends TestCase
     {
         config()->set('vanguard.dump.mysql_options', '--single-transaction --routines --triggers --events');
 
-        $driver  = new ExposedDatabaseDriver;
+        $driver = new ExposedDatabaseDriver;
         $command = implode(' ', $driver->buildMysqlDumpCommand('/usr/bin/mysqldump', $this->mysqlConfig()));
 
         $this->assertStringContainsString('--events', $command);
@@ -224,7 +224,7 @@ class DatabaseDriverMysqlTest extends TestCase
     {
         config()->set('vanguard.dump.mysql_options', ['--single-transaction', '--hex-blob']);
 
-        $driver  = new ExposedDatabaseDriver;
+        $driver = new ExposedDatabaseDriver;
         $command = $driver->buildMysqlDumpCommand('/usr/bin/mysqldump', $this->mysqlConfig());
 
         $this->assertContains('--hex-blob', $command);
@@ -234,7 +234,7 @@ class DatabaseDriverMysqlTest extends TestCase
     #[Test]
     public function the_socket_is_passed_to_mysqldump_when_configured(): void
     {
-        $driver  = new ExposedDatabaseDriver;
+        $driver = new ExposedDatabaseDriver;
         $command = $driver->buildMysqlDumpCommand(
             '/usr/bin/mysqldump',
             $this->mysqlConfig() + ['unix_socket' => '/var/run/mysql.sock'],
@@ -251,7 +251,7 @@ class DatabaseDriverMysqlTest extends TestCase
     public function the_pdo_fallback_disables_buffered_queries_for_the_data_read(): void
     {
         $driver = new FakePdoDatabaseDriver(new FakeMysqlPdo(5));
-        $dest   = $this->tmpDir.'/pdo-buffering.sql.gz';
+        $dest = $this->tmpDir.'/pdo-buffering.sql.gz';
 
         $driver->runPdoDump(['database' => 'shop'], $dest);
 
@@ -266,7 +266,7 @@ class DatabaseDriverMysqlTest extends TestCase
     public function the_pdo_fallback_batches_insert_statements(): void
     {
         $driver = new FakePdoDatabaseDriver(new FakeMysqlPdo(250));
-        $dest   = $this->tmpDir.'/pdo-batched.sql.gz';
+        $dest = $this->tmpDir.'/pdo-batched.sql.gz';
 
         $driver->runPdoDump(['database' => 'shop'], $dest);
 
@@ -281,7 +281,7 @@ class DatabaseDriverMysqlTest extends TestCase
     public function the_pdo_fallback_keeps_its_schema_and_foreign_key_wrappers(): void
     {
         $driver = new FakePdoDatabaseDriver(new FakeMysqlPdo(3));
-        $dest   = $this->tmpDir.'/pdo-schema.sql.gz';
+        $dest = $this->tmpDir.'/pdo-schema.sql.gz';
 
         $driver->runPdoDump(['database' => 'shop'], $dest);
 
@@ -297,7 +297,7 @@ class DatabaseDriverMysqlTest extends TestCase
     public function the_pdo_fallback_writes_every_row_and_quotes_nulls(): void
     {
         $driver = new FakePdoDatabaseDriver(new FakeMysqlPdo(4, withNull: true));
-        $dest   = $this->tmpDir.'/pdo-rows.sql.gz';
+        $dest = $this->tmpDir.'/pdo-rows.sql.gz';
 
         $driver->runPdoDump(['database' => 'shop'], $dest);
 
@@ -372,7 +372,7 @@ class DatabaseDriverMysqlTest extends TestCase
     public function the_pdo_fallback_produces_a_complete_and_valid_gzip_archive(): void
     {
         $driver = new FakePdoDatabaseDriver(new FakeMysqlPdo(250));
-        $dest   = $this->tmpDir.'/pdo-complete.sql.gz';
+        $dest = $this->tmpDir.'/pdo-complete.sql.gz';
 
         $driver->runPdoDump(['database' => 'shop'], $dest);
 
@@ -394,6 +394,57 @@ class DatabaseDriverMysqlTest extends TestCase
 
         $this->assertSame(crc32($contents), $trailer['crc']);
         $this->assertSame(strlen($contents), $trailer['length']);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Restore — the mysql client is not mysqldump
+    // ─────────────────────────────────────────────────────────────
+
+    #[Test]
+    public function it_restores_without_passing_dump_only_flags_to_the_mysql_client(): void
+    {
+        // mysql rejects --single-transaction, lock-tables and set-gtid-purged
+        // outright ("unknown option"), so a restore built from the dump flags
+        // fails before reading a single statement.
+        $log = $this->tmpDir.'/mysql-args.log';
+        $binary = $this->fakeMysqldump(
+            'echo "$@" > '.escapeshellarg($log)."\n".'cat > /dev/null'
+        );
+
+        config()->set('vanguard.binaries.mysql', $binary);
+
+        $dump = $this->tmpDir.'/restore-me.sql.gz';
+        file_put_contents($dump, gzencode("INSERT INTO users VALUES (1, 'ada');\n"));
+
+        (new DatabaseDriver)->restore('mysql', $this->mysqlConfig(), $dump);
+
+        $args = trim(file_get_contents($log));
+
+        $this->assertStringNotContainsString('--single-transaction', $args);
+        $this->assertStringNotContainsString('lock-tables', $args);
+        $this->assertStringNotContainsString('set-gtid-purged', $args);
+        $this->assertStringNotContainsString('--quick', $args);
+
+        // The connection details must survive the cleanup.
+        $this->assertStringContainsString('127.0.0.1', $args);
+        $this->assertStringContainsString('root', $args);
+        $this->assertStringContainsString('shop', $args);
+    }
+
+    #[Test]
+    public function it_feeds_the_dump_to_the_mysql_client_on_stdin(): void
+    {
+        $received = $this->tmpDir.'/mysql-stdin.sql';
+        $binary = $this->fakeMysqldump('cat > '.escapeshellarg($received));
+
+        config()->set('vanguard.binaries.mysql', $binary);
+
+        $dump = $this->tmpDir.'/payload.sql.gz';
+        file_put_contents($dump, gzencode("CREATE TABLE marker (id int);\n"));
+
+        (new DatabaseDriver)->restore('mysql', $this->mysqlConfig(), $dump);
+
+        $this->assertStringContainsString('CREATE TABLE marker', file_get_contents($received));
     }
 }
 
@@ -449,7 +500,7 @@ class FakeMysqlPdo extends \PDO
     public function __construct(int $rows = 3, bool $withNull = false)
     {
         parent::__construct('sqlite::memory:', null, null, [
-            \PDO::ATTR_ERRMODE            => \PDO::ERRMODE_EXCEPTION,
+            \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
             \PDO::ATTR_DEFAULT_FETCH_MODE => \PDO::FETCH_ASSOC,
         ]);
 

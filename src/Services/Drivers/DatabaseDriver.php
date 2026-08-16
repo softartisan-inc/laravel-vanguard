@@ -21,10 +21,10 @@ class DatabaseDriver
     /**
      * Dump a database to a gzipped SQL file.
      *
-     * @param  string  $driver       'mysql'|'mariadb'|'pgsql'|'sqlite'
-     * @param  array   $config       Laravel DB connection config
+     * @param  string  $driver  'mysql'|'mariadb'|'pgsql'|'sqlite'
+     * @param  array  $config  Laravel DB connection config
      * @param  string  $destination  Absolute path for output (.sql.gz)
-     * @return string                Path to the created dump file
+     * @return string Path to the created dump file
      *
      * @throws RuntimeException For unsupported drivers or if the dump file is empty/missing
      */
@@ -40,9 +40,9 @@ class DatabaseDriver
 
         match ($driver) {
             'mysql', 'mariadb' => $this->dumpMysql($config, $destination),
-            'pgsql'            => $this->dumpPgsql($config, $destination),
-            'sqlite'           => $this->dumpSqlite($config, $destination),
-            default            => throw new RuntimeException("Unsupported DB driver: [{$driver}]"),
+            'pgsql' => $this->dumpPgsql($config, $destination),
+            'sqlite' => $this->dumpSqlite($config, $destination),
+            default => throw new RuntimeException("Unsupported DB driver: [{$driver}]"),
         };
 
         if (! file_exists($destination) || filesize($destination) === 0) {
@@ -56,7 +56,7 @@ class DatabaseDriver
      * Restore a .sql.gz dump into a database.
      *
      * @param  string  $driver  'mysql'|'mariadb'|'pgsql'|'sqlite'
-     * @param  array   $config  Laravel DB connection config
+     * @param  array  $config  Laravel DB connection config
      * @param  string  $source  Absolute path to the .sql.gz dump file
      *
      * @throws RuntimeException For unsupported drivers or missing source file
@@ -73,8 +73,8 @@ class DatabaseDriver
 
         match ($driver) {
             'mysql', 'mariadb' => $this->restoreMysql($config, $source),
-            'pgsql'            => $this->restorePgsql($config, $source),
-            'sqlite'           => $this->restoreSqlite($config, $source),
+            'pgsql' => $this->restorePgsql($config, $source),
+            'sqlite' => $this->restoreSqlite($config, $source),
         };
     }
 
@@ -87,7 +87,7 @@ class DatabaseDriver
      * Falls back to a PHP/PDO-based dump when mysqldump is not installed,
      * which is common in Docker or minimal server environments.
      *
-     * @param  array   $c     Laravel MySQL connection config
+     * @param  array  $c  Laravel MySQL connection config
      * @param  string  $dest  Absolute destination path (.sql.gz)
      */
     protected function dumpMysql(array $c, string $dest): void
@@ -129,7 +129,7 @@ class DatabaseDriver
      * never shows up in the system process list.
      *
      * @param  string  $binary  Resolved mysqldump path or bare name
-     * @param  array   $c       Laravel MySQL connection config
+     * @param  array  $c  Laravel MySQL connection config
      * @return array<int, string>
      */
     protected function mysqlDumpCommand(string $binary, array $c): array
@@ -186,8 +186,8 @@ class DatabaseDriver
      * destination file is removed so no corrupt backup survives.
      *
      * @param  array<int, string>  $command  Argument list, binary first
-     * @param  string              $dest     Absolute destination path (.sql.gz)
-     * @param  string              $label    Short label used in error messages
+     * @param  string  $dest  Absolute destination path (.sql.gz)
+     * @param  string  $label  Short label used in error messages
      *
      * @throws RuntimeException When the process cannot start, the destination
      *                          stops accepting data, or the command exits non-zero
@@ -215,11 +215,11 @@ class DatabaseDriver
         stream_set_blocking($pipes[2], false);
 
         $stderr = '';
-        $open   = [1 => $pipes[1], 2 => $pipes[2]];
+        $open = [1 => $pipes[1], 2 => $pipes[2]];
 
         while ($open !== []) {
-            $read   = array_values($open);
-            $write  = null;
+            $read = array_values($open);
+            $write = null;
             $except = null;
 
             if (@stream_select($read, $write, $except, 1) === false) {
@@ -281,7 +281,7 @@ class DatabaseDriver
      * Exports schema (CREATE TABLE) and data (INSERT) for every table.
      * Output is written directly to a gzip stream, avoiding large temp files.
      *
-     * @param  array   $c     Laravel MySQL connection config
+     * @param  array  $c  Laravel MySQL connection config
      * @param  string  $dest  Absolute destination path (.sql.gz)
      *
      * @throws RuntimeException On PDO errors, or when the destination stops accepting data
@@ -297,7 +297,7 @@ class DatabaseDriver
 
             $writer->write("-- Vanguard MySQL dump (PDO fallback)\n");
             $writer->write("-- Database: {$db}\n");
-            $writer->write("-- Generated: ".now()->toIso8601String()."\n\n");
+            $writer->write('-- Generated: '.now()->toIso8601String()."\n\n");
             $writer->write("SET FOREIGN_KEY_CHECKS=0;\n\n");
 
             $tables = $pdo->query('SHOW TABLES')->fetchAll(\PDO::FETCH_COLUMN);
@@ -306,8 +306,8 @@ class DatabaseDriver
             // other query may run until the open result set is fully consumed.
             $schemas = [];
             foreach ($tables as $table) {
-                $create           = $pdo->query("SHOW CREATE TABLE `{$table}`")->fetch();
-                $schemas[$table]  = $create['Create Table'];
+                $create = $pdo->query("SHOW CREATE TABLE `{$table}`")->fetch();
+                $schemas[$table] = $create['Create Table'];
             }
 
             // PDO MySQL buffers results by default, so "SELECT * FROM table"
@@ -348,14 +348,14 @@ class DatabaseDriver
     {
         $dsn = sprintf(
             'mysql:host=%s;port=%s;dbname=%s;charset=%s',
-            $c['host']     ?? '127.0.0.1',
-            $c['port']     ?? 3306,
+            $c['host'] ?? '127.0.0.1',
+            $c['port'] ?? 3306,
             $c['database'],
-            $c['charset']  ?? 'utf8mb4',
+            $c['charset'] ?? 'utf8mb4',
         );
 
         return new \PDO($dsn, $c['username'] ?? 'root', $c['password'] ?? '', [
-            \PDO::ATTR_ERRMODE            => \PDO::ERRMODE_EXCEPTION,
+            \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
             \PDO::ATTR_DEFAULT_FETCH_MODE => \PDO::FETCH_ASSOC,
         ]);
     }
@@ -366,17 +366,17 @@ class DatabaseDriver
      * Rows are grouped into batches so the dump stays small and replays much
      * faster than one statement per row.
      *
-     * @param  \PDO            $pdo     Connection, already switched to unbuffered reads
+     * @param  \PDO  $pdo  Connection, already switched to unbuffered reads
      * @param  GzipDumpWriter  $writer  Open dump writer
-     * @param  string          $table   Table name
+     * @param  string  $table  Table name
      */
     protected function writeTableDataViaPdo(\PDO $pdo, GzipDumpWriter $writer, string $table): void
     {
         $statement = $pdo->query("SELECT * FROM `{$table}`");
 
-        $batch      = [];
+        $batch = [];
         $batchBytes = 0;
-        $wroteAny   = false;
+        $wroteAny = false;
 
         foreach ($statement as $row) {
             $values = array_map(
@@ -384,15 +384,15 @@ class DatabaseDriver
                 $row,
             );
 
-            $tuple        = '('.implode(',', $values).')';
-            $batch[]      = $tuple;
-            $batchBytes  += strlen($tuple);
+            $tuple = '('.implode(',', $values).')';
+            $batch[] = $tuple;
+            $batchBytes += strlen($tuple);
 
             if (count($batch) >= self::PDO_INSERT_MAX_ROWS || $batchBytes >= self::PDO_INSERT_MAX_BYTES) {
                 $writer->write("INSERT INTO `{$table}` VALUES ".implode(',', $batch).";\n");
-                $batch      = [];
+                $batch = [];
                 $batchBytes = 0;
-                $wroteAny   = true;
+                $wroteAny = true;
             }
         }
 
@@ -413,7 +413,7 @@ class DatabaseDriver
      *
      * Uses MYSQL_PWD environment variable to pass the password securely.
      *
-     * @param  array   $c    Laravel MySQL connection config
+     * @param  array  $c  Laravel MySQL connection config
      * @param  string  $src  Absolute path to the .sql.gz dump file
      */
     protected function restoreMysql(array $c, string $src): void
@@ -442,7 +442,7 @@ class DatabaseDriver
      * environment variable to avoid exposing it in the process list.
      *
      * @param  array  $c  Laravel MySQL connection config
-     * @return string     Shell-safe argument string
+     * @return string Shell-safe argument string
      */
     protected function mysqlConnectionArgs(array $c): string
     {
@@ -457,12 +457,10 @@ class DatabaseDriver
             $args .= ' --socket='.escapeshellarg($c['unix_socket']);
         }
 
-        // Safe dump flags
-        $args .= ' --single-transaction --quick --lock-tables=false';
-
-        // Suppress GTID warning if not using GTID replication
-        $args .= ' --set-gtid-purged=OFF';
-
+        // Connection only. Dump flags belong to mysqlDumpOptions(): the mysql
+        // client rejects --single-transaction, lock-tables and set-gtid-purged
+        // as unknown options and exits before reading a single statement, so
+        // adding them here made every CLI restore fail.
         return $args;
     }
 
@@ -500,7 +498,7 @@ class DatabaseDriver
      *
      * The password is passed via the PGPASSWORD environment variable prefix.
      *
-     * @param  array   $c     Laravel PostgreSQL connection config
+     * @param  array  $c  Laravel PostgreSQL connection config
      * @param  string  $dest  Absolute destination path (.sql.gz)
      */
     protected function dumpPgsql(array $c, string $dest): void
@@ -524,7 +522,7 @@ class DatabaseDriver
      *
      * The password is passed via the PGPASSWORD environment variable prefix.
      *
-     * @param  array   $c    Laravel PostgreSQL connection config
+     * @param  array  $c  Laravel PostgreSQL connection config
      * @param  string  $src  Absolute path to the .sql.gz dump file
      */
     protected function restorePgsql(array $c, string $src): void
@@ -550,7 +548,7 @@ class DatabaseDriver
      * safely prepended to any command without causing syntax errors.
      *
      * @param  array  $c  Laravel PostgreSQL connection config
-     * @return string     e.g. "PGPASSWORD='secret'" or ""
+     * @return string e.g. "PGPASSWORD='secret'" or ""
      */
     protected function pgPasswordEnv(array $c): string
     {
@@ -568,7 +566,7 @@ class DatabaseDriver
      * and written directly to a gzip stream. For file-based databases, gzip
      * compresses the file directly for speed.
      *
-     * @param  array   $c     Laravel SQLite connection config
+     * @param  array  $c  Laravel SQLite connection config
      * @param  string  $dest  Absolute destination path (.sql.gz)
      *
      * @throws RuntimeException If the database file does not exist
@@ -581,7 +579,7 @@ class DatabaseDriver
         if ($src === ':memory:') {
             $pdo = new \PDO("sqlite:{$src}");
             $sql = '';
-            foreach ($pdo->query("SELECT sql FROM sqlite_master WHERE sql IS NOT NULL") as $row) {
+            foreach ($pdo->query('SELECT sql FROM sqlite_master WHERE sql IS NOT NULL') as $row) {
                 $sql .= $row['sql'].";\n";
             }
             // The writer cleans up its own partial file when a write fails.
@@ -608,7 +606,7 @@ class DatabaseDriver
      *
      * No-op for in-memory databases as there is nothing meaningful to restore to.
      *
-     * @param  array   $c    Laravel SQLite connection config
+     * @param  array  $c  Laravel SQLite connection config
      * @param  string  $src  Absolute path to the gzipped SQLite file
      */
     protected function restoreSqlite(array $c, string $src): void
@@ -630,7 +628,7 @@ class DatabaseDriver
     /**
      * Execute a shell command and throw a RuntimeException on non-zero exit.
      *
-     * @param  string  $cmd    The shell command to run (must use escapeshellarg for all user data)
+     * @param  string  $cmd  The shell command to run (must use escapeshellarg for all user data)
      * @param  string  $label  Short label used in the error message (e.g. 'mysqldump')
      *
      * @throws RuntimeException
@@ -650,7 +648,6 @@ class DatabaseDriver
      * Check whether a binary is actually executable on this system.
      *
      * @param  string  $binary  Resolved binary path or bare name
-     * @return bool
      */
     protected function binaryAvailable(string $binary): bool
     {
@@ -674,7 +671,7 @@ class DatabaseDriver
      *   3. Fall back to the bare binary name (relies on PATH)
      *
      * @param  string  $binary  Binary name: 'mysqldump', 'mysql', 'pg_dump', 'psql'
-     * @return string           Absolute path or bare name
+     * @return string Absolute path or bare name
      */
     protected function resolveBinary(string $binary): string
     {
