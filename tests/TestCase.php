@@ -34,6 +34,10 @@ abstract class TestCase extends Orchestra
             'driver' => 'sqlite',
             'database' => ':memory:',
             'prefix' => '',
+            // SQLite enforces foreign keys only when asked, and the pragma is a
+            // no-op inside a transaction — which RefreshDatabase opens before every
+            // test. Set here, the connector applies it at connect time.
+            'foreign_key_constraints' => true,
         ]);
 
         // Vanguard config defaults for tests
@@ -82,12 +86,6 @@ abstract class TestCase extends Orchestra
 
     protected function setUpDatabase(): void
     {
-        // Enable SQLite foreign key constraints before loading migrations
-        // This ensures foreign key constraints are created with enforcement enabled
-        if ($this->app['config']->get('database.default') === 'sqlite') {
-            \DB::getPdo()->exec('PRAGMA foreign_keys = ON');
-        }
-
         $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
     }
 

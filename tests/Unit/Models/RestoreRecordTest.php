@@ -2,7 +2,6 @@
 
 namespace SoftArtisan\Vanguard\Tests\Unit\Models;
 
-use Illuminate\Support\Facades\DB;
 use PHPUnit\Framework\Attributes\Test;
 use SoftArtisan\Vanguard\Models\RestoreRecord;
 use SoftArtisan\Vanguard\Tests\TestCase;
@@ -42,10 +41,10 @@ class RestoreRecordTest extends TestCase
     public function the_history_survives_the_deletion_of_its_backup(): void
     {
         // A history whose rows depend on a deletable record is not a history.
-        // SQLite enforces foreign keys only when asked, and the suite runs on
-        // SQLite: without this pragma the nullOnDelete clause is never exercised
-        // and the test would pass for the wrong reason.
-        DB::statement('PRAGMA foreign_keys = ON');
+        // SQLite enforces foreign keys only when asked. The connection config sets
+        // 'foreign_key_constraints' => true, which ensures the pragma is applied
+        // at connection time (before any transaction), so the nullOnDelete constraint
+        // is enforced during this test.
 
         $backup = $this->makeRecord();
         $restore = $this->makeRestore([
