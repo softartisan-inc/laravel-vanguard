@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\Storage;
 use PHPUnit\Framework\Attributes\Test;
 use SoftArtisan\Vanguard\Console\VanguardScheduler;
 use SoftArtisan\Vanguard\Jobs\RunRestoreJob;
+use SoftArtisan\Vanguard\Models\RestoreRecord;
 use SoftArtisan\Vanguard\Tests\TestCase;
 use SoftArtisan\Vanguard\Vanguard;
 
@@ -103,5 +104,17 @@ class OperationsConsoleFlowTest extends TestCase
         ])->assertStatus(400);
 
         Queue::assertNothingPushed();
+
+        // The refusal is on presence, not value: a caller sending
+        // wipe_storage=false is told the parameter has no meaning here
+        // rather than being silently obeyed. A test that only ever sends
+        // true would not notice the check being weakened to a value test.
+        $this->postJson("/vanguard/api/backups/{$backup->id}/restore", [
+            'confirm' => 'landlord',
+            'wipe_storage' => false,
+        ])->assertStatus(400);
+
+        Queue::assertNothingPushed();
+        $this->assertSame(0, RestoreRecord::count(), 'a refused restore must leave no history row behind');
     }
 }
