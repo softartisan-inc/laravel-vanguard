@@ -171,18 +171,21 @@ class VanguardScheduler
      */
     public static function lastSeenAt(): ?Carbon
     {
-        $seen = Cache::get(static::HEARTBEAT_KEY);
-
-        if (! is_string($seen) || $seen === '') {
-            return null;
-        }
-
         try {
+            $seen = Cache::get(static::HEARTBEAT_KEY);
+
+            if (! is_string($seen) || $seen === '') {
+                return null;
+            }
+
             return Carbon::parse($seen);
         } catch (\Throwable) {
-            // A corrupted cache entry means "unknown", not "crash the health
-            // screen" — the page that reports breakage is the last thing
-            // allowed to break.
+            // A corrupted cache entry — or a store that cannot be reached at
+            // all — means "unknown", not "crash the health screen". On this
+            // product the cache is Redis, and a Redis outage is precisely when
+            // someone loads the page that reports breakage: it is the last
+            // thing allowed to break. The store read used to sit outside this
+            // try while every other section of the payload was guarded.
             return null;
         }
     }
