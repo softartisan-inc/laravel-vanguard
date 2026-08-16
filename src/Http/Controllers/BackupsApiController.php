@@ -2,6 +2,7 @@
 
 namespace SoftArtisan\Vanguard\Http\Controllers;
 
+use Closure;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
@@ -151,54 +152,67 @@ class BackupsApiController extends Controller
     /**
      * POST /vanguard/api/backups/run
      *
-     * Trigger a backup. The 'type' parameter determines what is backed up.
-     * When the queue is enabled, jobs are dispatched and the response indicates queuing.
-     *
-     * @param  Request  $request  Validated fields: type (required), tenant_id (required for 'tenant')
+     * Trigger a backup. Every option `vanguard:backup` accepts is reachable
+     * here: the target (type / tenant_id), whether the filesystem comes along
+     * (include_filesystem, i.e. --no-filesystem), and whether the work is
+     * queued regardless of configuration (queue, i.e. --queue).
      */
     public function run(Request $request): JsonResponse
     {
         $request->validate([
             'type' => 'required|in:landlord,tenant,all-tenants,filesystem',
             'tenant_id' => 'required_if:type,tenant|nullable|string',
+            'include_filesystem' => 'nullable|boolean',
+            'queue' => 'nullable|boolean',
         ]);
+
+        // The options array the endpoint used to drop on the floor: it
+        // dispatched [] and called the manager with no arguments, so
+        // --no-filesystem simply had no equivalent from the dashboard.
+        $options = ['include_filesystem' => $request->boolean('include_filesystem', true)];
+
+        // Parity with --queue: an explicit value wins over the configuration,
+        // in both directions. Absent, the configuration decides as before.
+        $queued = $request->has('queue')
+            ? $request->boolean('queue')
+            : (bool) config('vanguard.queue.enabled', true);
 
         try {
             switch ($request->type) {
                 case 'landlord':
-                    if (config('vanguard.queue.enabled', true)) {
-                        RunTenantBackupJob::dispatch('__landlord__', [])
-                            ->onConnection(config('vanguard.queue.connection'))
-                            ->onQueue(config('vanguard.queue.queue', 'vanguard'));
-
-                        return response()->json(['message' => 'Landlord backup queued.', 'queued' => true]);
-                    }
-                    $record = $this->manager->backupLandlord();
-
-                    return response()->json(['record' => $this->formatRecord($record)]);
+                    return $this->dispatchOrRun(
+                        '__landlord__',
+                        $options,
+                        $queued,
+                        fn () => $this->manager->backupLandlord($options),
+                        'Landlord backup queued.',
+                    );
 
                 case 'tenant':
                     $tenant = $this->tenancy->findTenant($request->tenant_id);
-                    if (config('vanguard.queue.enabled', true)) {
-                        RunTenantBackupJob::dispatch($request->tenant_id)
-                            ->onConnection(config('vanguard.queue.connection'))
-                            ->onQueue(config('vanguard.queue.queue', 'vanguard'));
 
-                        return response()->json(['message' => 'Tenant backup queued.', 'queued' => true]);
-                    }
-                    $record = $this->manager->backupTenant($tenant);
-
-                    return response()->json(['record' => $this->formatRecord($record)]);
-
-                case 'all-tenants':
-                    $results = $this->manager->backupAllTenants();
-
-                    return response()->json(['results' => $results]);
+                    return $this->dispatchOrRun(
+                        (string) $request->tenant_id,
+                        $options,
+                        $queued,
+                        fn () => $this->manager->backupTenant($tenant, $options),
+                        'Tenant backup queued.',
+                    );
 
                 case 'filesystem':
-                    $record = $this->manager->backupFilesystem();
+                    return $this->dispatchOrRun(
+                        '__filesystem__',
+                        $options,
+                        $queued,
+                        fn () => $this->manager->backupFilesystem($options),
+                        'Filesystem backup queued.',
+                    );
 
-                    return response()->json(['record' => $this->formatRecord($record)]);
+                case 'all-tenants':
+                    // backupAllTenants() consults vanguard.queue.enabled itself
+                    // and dispatches one job per tenant, so it is not routed
+                    // through dispatchOrRun(): there is no single job to push.
+                    return response()->json(['results' => $this->manager->backupAllTenants($options)]);
             }
         } catch (\Throwable $e) {
             Log::error('[Vanguard] Backup run failed', [
@@ -212,6 +226,30 @@ class BackupsApiController extends Controller
         }
 
         return response()->json(['error' => 'Invalid type'], 422);
+    }
+
+    /**
+     * Queue one backup job, or run it inline and return the record.
+     *
+     * @param  string  $target  Tenant key, or the '__landlord__' / '__filesystem__' sentinel
+     * @param  Closure  $inline  Produces the BackupRecord when nothing is queued
+     */
+    protected function dispatchOrRun(
+        string $target,
+        array $options,
+        bool $queued,
+        Closure $inline,
+        string $queuedMessage,
+    ): JsonResponse {
+        if ($queued) {
+            RunTenantBackupJob::dispatch($target, $options)
+                ->onConnection(config('vanguard.queue.connection'))
+                ->onQueue(config('vanguard.queue.queue', 'vanguard'));
+
+            return response()->json(['message' => $queuedMessage, 'queued' => true]);
+        }
+
+        return response()->json(['record' => $this->formatRecord($inline())]);
     }
 
     /**
