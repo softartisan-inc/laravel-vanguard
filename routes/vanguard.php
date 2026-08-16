@@ -31,6 +31,13 @@ Route::middleware([VanguardAuthenticate::class])->group(function () {
             Route::get('/stream', [SseController::class, 'stream'])->name('stream');
         });
 
+        // Download — rate-limited with the heavy operations rather than the reads:
+        // it moves gigabytes and is traced nominatively.
+        Route::get('/backups/{id}/download', [BackupsApiController::class, 'download'])
+            ->middleware('throttle:vanguard.run')
+            ->name('backups.download')
+            ->where('id', '[0-9]+');
+
         // Backup trigger — tightly rate-limited (heavy server operation)
         Route::post('/backups/run', [BackupsApiController::class, 'run'])
             ->middleware('throttle:vanguard.run')

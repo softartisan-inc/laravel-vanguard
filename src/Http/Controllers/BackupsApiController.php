@@ -17,6 +17,7 @@ use SoftArtisan\Vanguard\Services\BackupManager;
 use SoftArtisan\Vanguard\Services\BackupStorageManager;
 use SoftArtisan\Vanguard\Services\TenancyResolver;
 use SoftArtisan\Vanguard\Vanguard;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class BackupsApiController extends Controller
 {
@@ -265,17 +266,24 @@ class BackupsApiController extends Controller
 
         try {
             if ($record->file_path) {
-                $disk = config('vanguard.destinations.local.disk', 'local');
-                Storage::disk($disk)->delete($record->file_path);
+                Storage::disk($this->diskFor('local'))->delete($record->file_path);
             }
             if ($record->remote_path) {
-                $disk = config('vanguard.destinations.remote.disk', 's3');
-                Storage::disk($disk)->delete($record->remote_path);
+                Storage::disk($this->diskFor('remote'))->delete($record->remote_path);
             }
             if ($record->ftp_path) {
-                $disk = config('vanguard.destinations.ftp.disk', 'ftp');
-                Storage::disk($disk)->delete($record->ftp_path);
+                Storage::disk($this->diskFor('ftp'))->delete($record->ftp_path);
             }
+
+            $this->trace('backup deleted', $record->tenant_id ?? $record->type, [
+                'backup_id' => $record->id,
+                'destinations' => array_keys(array_filter([
+                    'local' => $record->file_path,
+                    'remote' => $record->remote_path,
+                    'ftp' => $record->ftp_path,
+                ])),
+            ]);
+
             $record->delete();
         } catch (\Throwable $e) {
             Log::error('[Vanguard] Backup deletion failed', [
@@ -287,6 +295,79 @@ class BackupsApiController extends Controller
         }
 
         return response()->json(['message' => 'Backup deleted successfully.']);
+    }
+
+    /**
+     * GET /vanguard/api/backups/{id}/download
+     *
+     * Stream the archive from the destination that holds it.
+     *
+     * Streamed, never loaded: a landlord archive is gigabytes, and reading it
+     * into a PHP string would take the process down. Storage::download()
+     * builds the response on readStream().
+     */
+    public function download(int $id, Request $request): StreamedResponse|JsonResponse
+    {
+        $request->validate(['source' => 'nullable|in:local,remote,ftp']);
+
+        $record = BackupRecord::on(Vanguard::centralConnection())->find($id);
+
+        if ($record === null) {
+            return response()->json(['error' => "Backup #{$id} not found."], 404);
+        }
+
+        // Ordered local → remote → ftp, and filtered to the destinations this
+        // backup actually reached. No default of 'local': on the recommended
+        // production setup local is disabled and only the remote copy exists.
+        $paths = array_filter([
+            'local' => $record->file_path,
+            'remote' => $record->remote_path,
+            'ftp' => $record->ftp_path,
+        ]);
+
+        $source = $request->input('source') ?? array_key_first($paths);
+
+        if ($source === null || ! isset($paths[$source])) {
+            return response()->json([
+                'error' => $paths === []
+                    ? "Backup #{$record->id} reached no destination and has nothing to download."
+                    : "Backup #{$record->id} has no copy on [{$source}]. Available: "
+                        .implode(', ', array_keys($paths)).'.',
+            ], 400);
+        }
+
+        $disk = $this->diskFor($source);
+
+        if (! Storage::disk($disk)->exists($paths[$source])) {
+            return response()->json([
+                'error' => "Backup #{$record->id} is recorded on [{$source}] but the archive is "
+                    ."no longer present on disk [{$disk}].",
+            ], 404);
+        }
+
+        // Traced before the stream opens: this takes every tenant's database,
+        // personal data and all, off the server (spec §7).
+        $this->trace('backup downloaded', $record->tenant_id ?? $record->type, [
+            'backup_id' => $record->id,
+            'source' => $source,
+            'path' => $paths[$source],
+        ]);
+
+        return Storage::disk($disk)->download($paths[$source], basename($paths[$source]));
+    }
+
+    /**
+     * The filesystem disk backing a Vanguard destination.
+     *
+     * @param  string  $destination  'local' | 'remote' | 'ftp'
+     */
+    protected function diskFor(string $destination): string
+    {
+        return match ($destination) {
+            'remote' => config('vanguard.destinations.remote.disk', 's3'),
+            'ftp' => config('vanguard.destinations.ftp.disk', 'ftp'),
+            default => config('vanguard.destinations.local.disk', 'local'),
+        };
     }
 
     /**
