@@ -31,7 +31,14 @@
         />
       </div>
 
-      <div v-if="loading" class="empty"><div class="spinner"></div></div>
+      <!--
+        The spinner belongs to the first load and to nothing else. It used to
+        be shown on every fetch, which meant the live channel unmounted the
+        table roughly every ten seconds and built a new one: scroll position,
+        open detail panels and hovered rows all died on each tick. Once the
+        rows are here they stay, and each refresh patches them in place.
+      -->
+      <div v-if="!loaded.backups" class="empty"><div class="spinner"></div></div>
       <BackupTable
         v-else
         :records="backups.data"
@@ -65,7 +72,7 @@ import RestoreModal from '../components/RestoreModal.vue'
 import VPagination  from '../components/VPagination.vue'
 import { useBackups } from '../composables/useBackups.js'
 
-const { backups, loading, fetchBackups } = useBackups()
+const { backups, loaded, fetchBackups } = useBackups()
 
 const filters   = reactive({ status: '', type: '' })
 // The record being restored, or null when the dialog is closed.

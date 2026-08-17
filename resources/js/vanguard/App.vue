@@ -132,7 +132,11 @@ const showRunModal = ref(false)
 const { connected: rtConnected, driver: rtDriver, startRealtime, stopRealtime } = useRealtime(onRealtimeEvent)
 
 function onRealtimeEvent(event) {
-  // On any backup state change or poll tick → refresh current page
+  // On any backup or restore state change — and on a poll tick, which is the
+  // fallback for the same signal — the current page re-fetches its collection
+  // and merges it into the rows already displayed. Nothing is unmounted and
+  // nothing is reloaded: the page the operator is reading is the page they
+  // keep, with fresher numbers in it.
   if (event.type === 'backup.updated' || event.type === 'backup.completed'
     || event.type === 'backup.failed'  || event.type === 'poll') {
     refresh()

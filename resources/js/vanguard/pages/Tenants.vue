@@ -1,7 +1,7 @@
 <template>
   <div class="page">
     <!-- Empty / disabled -->
-    <div v-if="!loading && tenants.length === 0" class="empty">
+    <div v-if="loaded.tenants && tenants.length === 0" class="empty">
       <div class="empty-icon">👥</div>
       <div class="empty-text">No tenants found or tenancy is disabled.</div>
     </div>
@@ -16,7 +16,8 @@
         </button>
       </div>
 
-      <div v-if="loading" class="empty"><div class="spinner"></div></div>
+      <!-- First load only: a refresh patches the cards it already has. -->
+      <div v-if="!loaded.tenants" class="empty"><div class="spinner"></div></div>
 
       <div v-else class="tenant-grid">
         <div
@@ -55,7 +56,7 @@ import VBadge        from '../components/VBadge.vue'
 import { useBackups } from '../composables/useBackups.js'
 import { useToast }   from '../composables/useToast.js'
 
-const { tenants, loading, fetchTenants, runBackup } = useBackups()
+const { tenants, loaded, fetchTenants, runBackup } = useBackups()
 const toast = useToast()
 
 async function runTenantBackup(id) {

@@ -242,6 +242,23 @@ tr:hover td { background: rgba(255,255,255,0.02); }
 .page-btn.active { border-color: var(--accent); color: var(--accent); background: rgba(94,231,168,0.08); }
 .page-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 
+/* ── Row detail panel ── */
+.col-toggle { width: 26px; padding-right: 0; }
+.row-toggle {
+  background: transparent; border: none; color: var(--dim); cursor: pointer;
+  font-size: 11px; padding: 0 4px; transition: transform 0.15s, color 0.15s;
+}
+.row-toggle:hover { color: var(--text); }
+.row-toggle.open { transform: rotate(90deg); color: var(--accent); }
+.row-flag { color: var(--danger); font-size: 11px; margin-left: 6px; }
+.row-detail td { background: rgba(0,0,0,0.25); padding: 14px 16px; }
+.detail-error {
+  color: var(--danger); font-size: 11px; line-height: 1.6; white-space: pre-wrap;
+  word-break: break-word; margin-bottom: 10px;
+}
+.detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 6px 18px; font-size: 11px; color: var(--text); }
+.detail-key { color: var(--dim); letter-spacing: 1px; text-transform: uppercase; margin-right: 8px; }
+
 /* ── Page transition ── */
 .page { animation: fadeIn 0.2s ease; }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }

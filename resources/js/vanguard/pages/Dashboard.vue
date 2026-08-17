@@ -1,7 +1,9 @@
 <template>
   <div class="page">
     <!-- Loading -->
-    <div v-if="loading && !stats" class="empty">
+    <!-- First load only: every refresh after that is merged into the cards
+         and the table already on screen. -->
+    <div v-if="!loaded.stats" class="empty">
       <div class="spinner"></div>
     </div>
 
@@ -24,7 +26,7 @@ import StatCards  from '../components/StatCards.vue'
 import BackupTable from '../components/BackupTable.vue'
 import { useBackups } from '../composables/useBackups.js'
 
-const { stats, loading, fetchStats } = useBackups()
+const { stats, loaded, fetchStats } = useBackups()
 
 onMounted(fetchStats)
 
