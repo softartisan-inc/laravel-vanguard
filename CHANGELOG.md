@@ -7,6 +7,49 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
+## [2.4.0] — 2026-08-17
+
+The dashboard, made usable by the operator who has to sit in front of it. One
+defect that made the screen unreadable while anything was happening, and the
+two things that absence forced onto the command line: deleting more than one
+archive, and finding out what is running right now.
+
+**Read this before upgrading.** Two endpoints are new — `POST
+/vanguard/api/backups/bulk-delete` and `GET /vanguard/api/operations` — and
+`public/vanguard.js` / `public/vanguard.css` are rebuilt. If you serve the
+assets from your own build or from a CDN copy rather than through
+`AssetsController`, refresh that copy; a stale bundle posts to endpoints that
+have changed and shows none of this.
+
+**And then leave the new screen open for a minute.** `In Progress` is the one
+that tells you something no other screen could: a restore sitting in `pending`
+with nothing consuming the queue. If it says so on your installation, it is
+right — check your worker before you check the package.
+
+### Fixed
+- **The dashboard rebuilt itself every few seconds instead of updating its data.** On `All Backups` and `Tenants` the whole window blinked roughly every ten seconds, and a scroll position, a hovered row and anything the operator had opened died on each tick. The cause was not the live channel, which does exactly what it should: the three pages showed their spinner whenever *any* fetch was in flight — one shared flag, set by a fetch on any screen — so every event replaced the table with a spinner and then rendered brand-new rows. Collections are now merged into what is already displayed, row by row, matched on id: an unchanged row keeps its object, its DOM node and any state attached to it, and the spinner is bound to the first load alone. The same rule governs the polling fallback, which is the same signal by another road. **What to check:** open `All Backups`, scroll down, expand a failed row, and run a backup from another window — the list must update under you without moving you.
+
+### Added
+- **Selection and bulk delete on the backup table.** Clearing a week of failed tenant archives took one dialog per row. Rows now have check boxes, and the selection has one operation. It is a single request — `POST /vanguard/api/backups/bulk-delete` — rather than one `DELETE` per row: N requests give N chances to be cut off half-way with no record of where it stopped, and nothing in the log saying that one operator erased nine archives at 14:32. Each archive is erased through the same code path a single delete uses, so every destination a single delete clears is cleared here too, and each leaves its own trace line beside the one naming the whole operation. The call is refused unless `confirm` repeats the phrase the server expects, and **the phrase carries the count** — `delete 9 backups` — because the count is the part of this operation an operator gets wrong; a `curl` without it is refused exactly as the disabled button refuses a click. A partial outcome is reported as one: `207` with what went and what did not, reason by reason, shown on screen instead of a blanket success toast. Single delete keeps its plain dialog — asking for a typed phrase everywhere is how operators learn to type through confirmations without reading them.
+- **Downloading an archive from the interface, one row at a time.** The endpoint existed since 2.2 and nothing in the dashboard reached it. The link appears on rows that actually reached a destination, since the endpoint answers `400` for the others. There is deliberately **no** bulk download: a browser downloads one file per navigation, so a multi-selection would either fire N navigations the pop-up blocker eats after the first, or promise a server-side archive of archives that nothing builds — and these are gigabyte files.
+- **`In Progress` — a screen for the present tense**, backed by `GET /vanguard/api/operations`. Running backups and running restores with their live phase and elapsed time, what is queued behind them and for how long, the failures of the last day with their exact message, and the queue depth. The judgements are made server-side so a browser and a monitoring probe cannot reach different conclusions: `queue_unreadable` (the depth is *unknown*, never a `0` — a Redis that is down and an empty queue look identical to anyone handed a zero), `no_worker` (rows pending past a two-minute grace, named one by one, with the `queue:work` command that ends it), and `stalled` (a run older than the queue's own timeout, which is what a killed worker leaves behind). The screen polls on its own every five seconds on top of the live channel, because the state it exists for is precisely the one in which nothing changes and no event is ever sent.
+- **A detail panel on each backup row** — the exact error of a failure, the destinations it reached, its checksum and its timestamps — whose open state now survives every live tick.
+
+### Changed
+- **The bounded queue probe moved into a `ProbesQueueDepth` trait**, shared by the health and operations endpoints instead of copied. Two bounded Redis probes is two places to get the bound wrong, and the two screens would then disagree about whether a worker exists — the one question both of them are for. No behaviour changes on `/vanguard/api/health`.
+
+### Not verified in a browser
+Everything above is covered by the PHP suite as far as PHP can see it: the new
+endpoints' contracts, and the served bundle for the properties that would
+otherwise go stale silently — that it never reloads the window, that it posts
+to the routed paths, that it asks for the phrase rather than the browser's own
+`confirm()`. There is no JavaScript test runner in this package and none was
+added. That the screen no longer blinks, that the check boxes tick, that the
+elapsed times climb second by second — a human with a browser open confirms
+that, and nothing here claims to have.
+
+---
+
 ## [2.3.1] — 2026-08-17
 
 The four things 2.3.0 shipped without, plus the two defects that running this
