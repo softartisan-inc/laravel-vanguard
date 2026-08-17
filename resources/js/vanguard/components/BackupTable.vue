@@ -9,6 +9,16 @@
     <table v-else>
       <thead>
         <tr>
+          <th v-if="selectable" class="col-select">
+            <input
+              type="checkbox"
+              class="row-check"
+              title="Select every row on this page"
+              :checked="allSelected"
+              :indeterminate.prop="someSelected && !allSelected"
+              @change="$emit('select-all', $event.target.checked)"
+            />
+          </th>
           <th class="col-toggle"></th>
           <th>ID</th>
           <th>Type</th>
@@ -22,7 +32,16 @@
       </thead>
       <tbody>
         <template v-for="r in records" :key="r.id">
-          <tr>
+          <tr :class="{ 'row-selected': selected.has(r.id) }">
+            <td v-if="selectable" class="col-select">
+              <input
+                type="checkbox"
+                class="row-check"
+                :checked="selected.has(r.id)"
+                :title="`Select backup #${r.id}`"
+                @change="$emit('select', r.id, $event.target.checked)"
+              />
+            </td>
             <td class="col-toggle">
               <button
                 class="row-toggle"
@@ -50,6 +69,17 @@
             <td class="col-date">{{ r.created_at ? formatDate(r.created_at) : '—' }}</td>
             <td v-if="withActions">
               <div class="action-row">
+                <!-- Per row, and only per row. A browser downloads one file
+                     per navigation; offering it on a selection would either
+                     fire N navigations the pop-up blocker eats after the first
+                     or promise a server-side archive of archives nothing
+                     builds. One link, on the row that has something to give. -->
+                <a
+                  v-if="downloadable(r)"
+                  class="btn btn-ghost btn-sm"
+                  :href="`${basePath}/api/backups/${r.id}/download`"
+                  :title="`Download the archive of backup #${r.id}`"
+                >↓</a>
                 <!-- The whole record, not just the id: the restore dialog has
                      to know which target the operator must type back, and the
                      delete dialog names the target and the date so the operator
@@ -72,7 +102,7 @@
             to read it.
           -->
           <tr v-if="expanded.has(r.id)" class="row-detail">
-            <td :colspan="withActions ? 9 : 8">
+            <td :colspan="columns">
               <div v-if="r.error" class="detail-error">{{ r.error }}</div>
               <div v-else-if="r.filesystem_empty" class="detail-error">
                 This backup archived no file at all: the filesystem paths it was
@@ -93,15 +123,40 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { computed, inject, ref } from 'vue'
 import VBadge from './VBadge.vue'
 
-defineProps({
+const props = defineProps({
   records:     { type: Array,   default: () => [] },
   withActions: { type: Boolean, default: false },
+  selectable:  { type: Boolean, default: false },
+  // Ids, held by the page. The table reads it and never mutates it, so the
+  // selection outlives a merge, a sort and a re-render.
+  selected:    { type: Set,     default: () => new Set() },
 })
 
-defineEmits(['restore', 'delete'])
+defineEmits(['restore', 'delete', 'select', 'select-all'])
+
+const basePath = inject('basePath')
+
+const columns = computed(() => 8 + (props.withActions ? 1 : 0) + (props.selectable ? 1 : 0))
+
+const selectableIds = computed(() => props.records.map((r) => r.id))
+
+const allSelected = computed(() =>
+  selectableIds.value.length > 0 && selectableIds.value.every((id) => props.selected.has(id)),
+)
+
+const someSelected = computed(() => selectableIds.value.some((id) => props.selected.has(id)))
+
+/**
+ * A row worth offering a link for: completed, and holding a path somewhere.
+ * The endpoint answers 400 for a backup that reached no destination, and a
+ * link that is always refused is worse than no link.
+ */
+function downloadable(r) {
+  return r.status === 'completed' && Array.isArray(r.destinations) && r.destinations.length > 0
+}
 
 // Ids, not rows: an id survives the record being merged, re-ordered or paged
 // away and back.

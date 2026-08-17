@@ -269,26 +269,7 @@ class BackupsApiController extends Controller
         $record = BackupRecord::on(Vanguard::centralConnection())->findOrFail($id);
 
         try {
-            if ($record->file_path) {
-                Storage::disk($this->diskFor('local'))->delete($record->file_path);
-            }
-            if ($record->remote_path) {
-                Storage::disk($this->diskFor('remote'))->delete($record->remote_path);
-            }
-            if ($record->ftp_path) {
-                Storage::disk($this->diskFor('ftp'))->delete($record->ftp_path);
-            }
-
-            $this->trace('backup deleted', $record->tenant_id ?? $record->type, [
-                'backup_id' => $record->id,
-                'destinations' => array_keys(array_filter([
-                    'local' => $record->file_path,
-                    'remote' => $record->remote_path,
-                    'ftp' => $record->ftp_path,
-                ])),
-            ]);
-
-            $record->delete();
+            $this->purge($record);
         } catch (\Throwable $e) {
             Log::error('[Vanguard] Backup deletion failed', [
                 'backup_id' => $id,
@@ -299,6 +280,144 @@ class BackupsApiController extends Controller
         }
 
         return response()->json(['message' => 'Backup deleted successfully.']);
+    }
+
+    /**
+     * How many archives one call may erase.
+     *
+     * A ceiling, not a preference: the request deletes files on up to three
+     * destinations per row inside one HTTP request, and an unbounded `ids`
+     * array is a way to hold a worker for minutes and to mistype a very large
+     * number into a very large loss. A page of the dashboard is fifteen rows.
+     */
+    public const BULK_DELETE_MAX = 100;
+
+    /**
+     * POST /vanguard/api/backups/bulk-delete
+     *
+     * Delete several archives in one call, and say row by row what happened.
+     *
+     * Not N DELETE requests from the browser: those give N chances to be cut
+     * off half-way with no record of where it stopped, N toasts racing each
+     * other, and no single line in the log saying that one operator erased
+     * nine archives at 14:32. The typed confirmation is the same rule prune
+     * and restore follow — here the phrase says how many, because "9" is
+     * exactly the part of this operation an operator can get wrong.
+     *
+     * Answers 200 when everything went, 207 when some rows did not, with the
+     * reason for each. There is no blanket success.
+     */
+    public function bulkDestroy(Request $request): JsonResponse
+    {
+        $request->validate([
+            'ids' => 'required|array|min:1|max:'.self::BULK_DELETE_MAX,
+            'ids.*' => 'required|integer|min:1',
+        ]);
+
+        // Deduplicated before counting: the phrase the operator types back has
+        // to name the number of archives that will actually disappear.
+        $ids = array_values(array_unique(array_map('intval', $request->input('ids'))));
+
+        $target = $this->bulkDeleteTarget(count($ids));
+
+        if ($rejection = $this->rejectUnlessConfirmed($request, $target)) {
+            return $rejection;
+        }
+
+        $records = BackupRecord::on(Vanguard::centralConnection())
+            ->whereIn('id', $ids)
+            ->get()
+            ->keyBy('id');
+
+        $deleted = [];
+        $failed = [];
+
+        foreach ($ids as $id) {
+            $record = $records->get($id);
+
+            // A row that is already gone is a failure, named. Counting it as
+            // deleted would report a success for something this call did not do.
+            if ($record === null) {
+                $failed[] = ['id' => $id, 'error' => "Backup #{$id} not found."];
+
+                continue;
+            }
+
+            try {
+                // The same path a single delete takes, so a destination that
+                // must be cleared for one is cleared for each of these, and
+                // each one leaves its own trace line.
+                $this->purge($record);
+                $deleted[] = $id;
+            } catch (\Throwable $e) {
+                Log::error('[Vanguard] Backup deletion failed', [
+                    'backup_id' => $id,
+                    'error' => $e->getMessage(),
+                ]);
+
+                $failed[] = [
+                    'id' => $id,
+                    'error' => "Failed to delete backup #{$id}. Check server logs for details.",
+                ];
+            }
+        }
+
+        $this->trace('bulk delete completed', $target, [
+            'requested' => count($ids),
+            'deleted' => $deleted,
+            'failed' => array_column($failed, 'id'),
+        ]);
+
+        return response()->json([
+            'deleted' => $deleted,
+            'failed' => $failed,
+            'message' => $failed === []
+                ? count($deleted).' backup(s) deleted.'
+                : count($deleted).' deleted, '.count($failed).' failed.',
+        ], $failed === [] ? 200 : 207);
+    }
+
+    /**
+     * The phrase a bulk delete has to have typed back at it.
+     *
+     * Mirrored by the dialog, which is why it is built here and nowhere else:
+     * a client that guesses the wording gives the operator a button that is
+     * refused every time.
+     */
+    protected function bulkDeleteTarget(int $count): string
+    {
+        return 'delete '.$count.' backup'.($count === 1 ? '' : 's');
+    }
+
+    /**
+     * Erase one archive from every destination it reached, then its row.
+     *
+     * Shared by the single and the bulk path so there is one definition of
+     * what deleting a backup means — and one trace line per archive either
+     * way. Throws; the callers decide what a failure costs.
+     */
+    protected function purge(BackupRecord $record): void
+    {
+        if ($record->file_path) {
+            Storage::disk($this->diskFor('local'))->delete($record->file_path);
+        }
+        if ($record->remote_path) {
+            Storage::disk($this->diskFor('remote'))->delete($record->remote_path);
+        }
+        if ($record->ftp_path) {
+            Storage::disk($this->diskFor('ftp'))->delete($record->ftp_path);
+        }
+
+        $this->trace('backup deleted', $record->tenant_id ?? $record->type, [
+            'backup_id' => $record->id,
+            'destinations' => array_keys(array_filter([
+                'local' => $record->file_path,
+                'remote' => $record->remote_path,
+                'ftp' => $record->ftp_path,
+            ])),
+        ]);
+
+        $record->delete();
     }
 
     /**

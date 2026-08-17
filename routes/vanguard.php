@@ -44,6 +44,13 @@ Route::middleware([VanguardAuthenticate::class])->group(function () {
             ->middleware('throttle:vanguard.run')
             ->name('backups.run');
 
+        // Bulk delete — erases several archives at once, so it sits with the
+        // restrictive limiter rather than with the single delete: the same
+        // mistake costs a page of archives instead of one.
+        Route::post('/backups/bulk-delete', [BackupsApiController::class, 'bulkDestroy'])
+            ->middleware('throttle:vanguard.restore')
+            ->name('backups.bulk-destroy');
+
         // Restore — most restrictive (destructive, irreversible)
         Route::post('/backups/{id}/restore', [BackupsApiController::class, 'restore'])
             ->middleware('throttle:vanguard.restore')

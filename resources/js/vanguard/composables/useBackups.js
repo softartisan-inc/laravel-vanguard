@@ -85,6 +85,29 @@ export function useBackups() {
   }
 
   /**
+   * The phrase the bulk delete endpoint refuses the call without.
+   *
+   * Mirrored from the server word for word — a dialog that asks for anything
+   * else hands the operator a button that is refused every time.
+   */
+  function bulkDeletePhrase(count) {
+    return `delete ${count} backup${count === 1 ? '' : 's'}`
+  }
+
+  /**
+   * Delete several archives in one call.
+   *
+   * One request, not one per row: the endpoint answers with what it deleted
+   * and what it refused, row by row, so a partial outcome can be reported as
+   * one — "7 deleted, 2 failed" with the reasons — instead of a handful of
+   * toasts racing each other. Resolves for a 207 as well as a 200, which is
+   * the whole point: the caller reads `failed`.
+   */
+  async function bulkDeleteBackups(ids, confirm) {
+    return api.post('/backups/bulk-delete', { ids, confirm })
+  }
+
+  /**
    * Queue a restore.
    *
    * `confirm` is not optional: the endpoint refuses the call with a 400 unless
@@ -109,6 +132,6 @@ export function useBackups() {
   return {
     stats, backups, tenants, loading, loaded, pending,
     fetchStats, fetchBackups, fetchTenants,
-    runBackup, deleteBackup, restoreBackup,
+    runBackup, deleteBackup, bulkDeleteBackups, bulkDeletePhrase, restoreBackup,
   }
 }
