@@ -7,6 +7,96 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
+## [2.4.1] — 2026-08-17
+
+A production restore failed with `sh: 1: mysql: not found`, and the error was
+the small half of what it exposed. The image ships PHP extensions and no
+database client; the dump path has fallen back to PHP/PDO since 2.1, so
+**backups had been succeeding all along** — and every one of those archives was
+unrestorable on the host that wrote them. Nobody could know until the day
+somebody needed one back. This package exists because backups lied for five
+months; a shelf of archives that cannot be replayed where they were written is
+the same lie in a new costume.
+
+**Read this before upgrading — then open the health screen.** `GET
+/vanguard/api/health` carries a new `database_clients` section, and it is the
+one to read first: for every driver Vanguard actually dumps it names both
+clients, where they were looked for, and the path each operation would take.
+A row with `"restore": {"via": "pdo"}` is this incident on your installation.
+It is no longer a broken restore — it is a slow one — but it is still worth
+fixing, and the row says so with `degraded: true`.
+
+**Install the client anyway.** A PDO restore replays the dump statement by
+statement from PHP: one round trip per statement, no `LOAD DATA`, no client-side
+batching beyond what the archive already carries, and a gigabyte landlord dump
+that the `mysql` client swallows in minutes can take an hour this way.
+`apt-get install mariadb-client` (or `default-mysql-client`) is the whole fix
+on the Debian images this is usually deployed on; pin it with
+`VANGUARD_MYSQL_BINARY` if it lands somewhere unusual.
+
+**PostgreSQL is not covered by this release.** `pg_dump` and `psql` have the
+same asymmetry — no fallback on either side — and none was built here: a
+Postgres installation without those binaries cannot back up *or* restore, which
+at least fails on the backup rather than lying. The health screen now says so
+outright: `"via": "none"` and `ok: false` for both operations, instead of the
+silence that let the MySQL case run for months.
+
+### Added
+- **A PDO restore fallback, symmetric to the dump one.** When the `mysql`
+  client is not available, a `.sql.gz` archive is replayed through PDO instead
+  of failing. The archive is read as a stream and cut into statements by a
+  splitter that tracks string literals (backslash escapes and doubled quotes),
+  backquoted identifiers, `--`, `#` and block comments, and `DELIMITER` blocks
+  — because the default dump options include `--routines --triggers`, so a
+  mysqldump-written archive on the same shelf carries trigger bodies full of
+  semicolons, and `explode(';')` puts half of one into your database without
+  saying anything. Nothing larger than a single statement is ever in memory:
+  `file_get_contents()` on a landlord dump takes the process down. The session
+  is opened the way the client path replays a dump — charset, `SQL_MODE`
+  `NO_AUTO_VALUE_ON_ZERO`, foreign key checks off and put back in a `finally` —
+  and deliberately *not* the time zone, which would shift every `TIMESTAMP` of
+  a PDO-written archive. The credential travels in the PDO DSN exactly as the
+  dump fallback's does: nothing in the environment, nothing on a command line.
+  A failing statement is reported with its number, the driver's own message and
+  the statement itself, abbreviated — "restore failed" sends an operator
+  reading a gigabyte of SQL by hand.
+- **`database_clients` on `GET /vanguard/api/health`.** One row per driver
+  Vanguard would dump — the central connection, plus the tenant template when
+  tenancy is on — carrying both clients, the path each was looked for at,
+  whether it is there, `via` (`client`, `pdo` or `none`), `ok`, `degraded` and
+  a reason. The binaries are resolved by the driver itself, the same lookup the
+  backup and restore use, so the screen cannot say one thing while the backup
+  does another.
+
+### Changed
+- **The fallback is automatic, and loud.** No flag to turn on: an opt-in
+  fallback is not there on the day it is needed, which is exactly what
+  happened. But it announces itself in the log and on the console when it
+  starts, naming the missing binary — a PDO restore of a large dump is far
+  slower than the client, and an operator watching a silent process deserves to
+  know why it is taking an hour.
+- **`vanguard:install` checks the restore clients too.** It looked for
+  `mysqldump` and `pg_dump` and never for `mysql` and `psql`, which is why a
+  host that could back up and not restore passed installation in silence. It
+  now asks the driver for all four, so the installer, the health screen and the
+  backup share one answer, and it says which of them have a PHP fallback and
+  which do not.
+- **A path pinned in `vanguard.binaries.*` is now the answer even when nothing
+  is there.** It used to be dropped in favour of auto-detection, so an operator
+  who pinned a path silently got a different binary — and the one state that
+  matters, "the client is not installed", could not be expressed at all.
+
+### Not verified on a live server
+The round trip is proven in the suite — a dump written by the PDO path and put
+back by it, an archive of mysqldump's shape put back by it, values carrying
+semicolons, quotes, backslashes and newlines compared row by row after the
+journey — but against a stubbed connection, because this environment has no
+MySQL server. What only you can confirm, on a real installation with the client
+uninstalled: that a full tenant restore lands identically through PDO and
+through the client, and how long yours actually takes.
+
+---
+
 ## [2.4.0] — 2026-08-17
 
 The dashboard, made usable by the operator who has to sit in front of it. One
