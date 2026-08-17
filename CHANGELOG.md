@@ -7,7 +7,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
-## [2.3.1] — 2026-08-16
+## [2.3.1] — 2026-08-17
 
 The four things 2.3.0 shipped without, plus the two defects that running this
 release against a real preprod installation turned up — a real MariaDB, a real
@@ -50,6 +50,22 @@ green throughout.
 ### Added
 - **`VANGUARD_ON_EMPTY_FILESYSTEM`** (`sources.on_empty_filesystem`) — what a backup should do when it was asked for the filesystem and not one of the configured paths exists. `warn`, the default, completes the backup and says so everywhere it can; `fail` refuses it. Set `fail` on an installation where an empty filesystem archive can only mean a misconfiguration — a tenant that certainly holds uploaded documents, for instance. It is deliberately not the default: the flag exists so that the installations which know better can say so, not so that an upgrade can start failing backups nobody asked it to judge.
 - **`--database=` is documented.** It shipped in 2.3.0 without a line in the README. Its tenant path is now pinned as tightly as its landlord one: that the redirect applies to the *tenant's own* connection and not to the landlord's, that the tenant's host, port and credentials come through unchanged, and that the connection `stancl/tenancy` installed is left exactly as it was — a rehearsal must not repoint the tenancy window it borrows. Each of those tests was checked against a deliberate mutation of the code it covers, so none of them is green by accident.
+
+### Verified against a live preprod installation
+Every fix above was exercised on a real installation before this was tagged —
+MariaDB, Redis, a Hetzner S3 bucket, `stancl/tenancy` active:
+
+- one landlord backup **and** one restore through the new credential file, authenticating against the real server: 45 tables written into a throwaway database, the production one untouched;
+- the console naming the destination it reached (`Remote : vanguard-backups/…`) on the local-disabled setup where it used to print an empty line, and `vanguard:list` showing `nowhere` for a completed record whose archive is gone — a real catalogue entry that had been sitting there unnoticed;
+- the empty-archive warning firing on a real tenant whose storage root holds no `app/` directory, naming the root and the configured paths, with `filesystem_empty` recorded on the row.
+
+One thing that campaign found is not a package defect and cannot be fixed from
+here: on that installation nothing had run `schedule:run` since March, so two
+tenants had never been backed up and a third not since 24 March — while the
+configuration looked perfect. `vanguard:backup --all-tenants`, the command the
+schedule registers, worked on the first try. Check `schedule.alive` on
+`/api/health` before trusting any of this: the package can now tell you the
+cron is dead, but only if you look.
 
 ### What a green suite still cannot tell you
 The credential change is exercised against stub binaries and, for the quoting
