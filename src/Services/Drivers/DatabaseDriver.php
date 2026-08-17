@@ -2,7 +2,10 @@
 
 namespace SoftArtisan\Vanguard\Services\Drivers;
 
+use Illuminate\Support\Facades\Log;
 use RuntimeException;
+use Symfony\Component\Console\Output\ConsoleOutput;
+use Symfony\Component\Console\Output\OutputInterface;
 
 class DatabaseDriver
 {
@@ -17,6 +20,9 @@ class DatabaseDriver
 
     /** Maximum byte size of the values of a single INSERT built by the PDO fallback. */
     protected const PDO_INSERT_MAX_BYTES = 1048576; // 1 MB
+
+    /** Maximum length of the failing statement quoted in a PDO restore error. */
+    protected const PDO_ERROR_STATEMENT_CHARS = 800;
 
     /**
      * Dump a database to a gzipped SQL file.
@@ -430,13 +436,48 @@ class DatabaseDriver
      */
     protected function restoreMysql(array $c, string $src): void
     {
+        $binary = $this->resolveBinary('mysql');
+
+        if ($this->binaryAvailable($binary)) {
+            $this->restoreMysqlViaCli($c, $src, $binary);
+
+            return;
+        }
+
+        // Automatic, not opt-in, and for one reason: the alternative is the
+        // August 2026 incident. That host had no mysql client, so the dump
+        // fallback ran and every backup succeeded — while every archive on the
+        // shelf was unrestorable, and nobody could know until the restore was
+        // needed. A fallback an operator must first hear about and then enable
+        // is not there on the day it is needed.
+        //
+        // It is loud, though: a PDO restore replays a gigabyte dump statement
+        // by statement from PHP and takes far longer than the client, so it
+        // says so in the log and on the console rather than leaving somebody
+        // watching a silent process.
+        $this->announcePdoRestore($c, $binary);
+        $this->restoreMysqlViaPdo($c, $src);
+    }
+
+    /**
+     * Restore MySQL through the mysql client binary.
+     *
+     * The password travels in a 0600 defaults file, removed in the finally
+     * block whatever the restore did — see writeMysqlDefaultsFile().
+     *
+     * @param  array  $c  Laravel MySQL connection config
+     * @param  string  $src  Absolute path to the .sql.gz dump file
+     * @param  string  $binary  Resolved mysql path or bare name
+     */
+    protected function restoreMysqlViaCli(array $c, string $src, string $binary): void
+    {
         $defaultsFile = $this->writeMysqlDefaultsFile($c);
 
         try {
             $cmd = sprintf(
                 'gunzip -c %s | %s %s %s 2>&1',
                 escapeshellarg($src),
-                escapeshellcmd($this->resolveBinary('mysql')),
+                escapeshellcmd($binary),
                 $this->mysqlConnectionArgs($c, $defaultsFile),
                 escapeshellarg($c['database']),
             );
@@ -445,6 +486,153 @@ class DatabaseDriver
         } finally {
             $this->removeMysqlDefaultsFile($defaultsFile);
         }
+    }
+
+    /**
+     * Restore MySQL via PDO — no binary required, the mirror of dumpMysqlViaPdo.
+     *
+     * The archive is read as a stream and cut into statements by
+     * SqlStatementReader: a landlord dump is gigabytes, and file_get_contents()
+     * on one takes the process down. Nothing larger than a single statement is
+     * ever held in memory.
+     *
+     * The credential reaches the server exactly as the dump fallback's does —
+     * through the PDO DSN, never in the environment and never on a command
+     * line, so there is no defaults file to write and none to leak.
+     *
+     * @param  array  $c  Laravel MySQL connection config
+     * @param  string  $src  Absolute path to the .sql.gz dump file
+     *
+     * @throws RuntimeException When the archive cannot be read, or a statement fails
+     */
+    protected function restoreMysqlViaPdo(array $c, string $src): void
+    {
+        $pdo = $this->createMysqlPdo($c);
+
+        $this->openMysqlRestoreSession($pdo, $c);
+
+        $number = 0;
+
+        try {
+            foreach ((new SqlStatementReader)->read(SqlStatementReader::gzipChunks($src)) as $statement) {
+                $number++;
+
+                try {
+                    $pdo->exec($statement);
+                } catch (\PDOException $e) {
+                    // As precise as the CLI path, which prints the client's own
+                    // error: which statement, and what the server said about
+                    // it. "Restore failed" sends an operator reading a
+                    // gigabyte of SQL by hand.
+                    throw new RuntimeException(sprintf(
+                        "[Vanguard:mysql restore-pdo] Statement #%d failed: %s\n%s",
+                        $number,
+                        $e->getMessage(),
+                        $this->abbreviateStatement($statement),
+                    ), 0, $e);
+                }
+            }
+        } finally {
+            $this->closeMysqlRestoreSession($pdo);
+        }
+    }
+
+    /**
+     * Put the session in the state the CLI path replays a dump in.
+     *
+     * The mysql client applies its own charset, and a mysqldump archive carries
+     * its own header statements; a dump written by dumpMysqlViaPdo carries only
+     * the foreign key switches. Setting all three here is what makes an archive
+     * land identically whichever path replays it:
+     *
+     *   - SET NAMES: the same charset the dump was read with, so a utf8mb4
+     *     value is not stored as its latin1 reading.
+     *   - SQL_MODE=NO_AUTO_VALUE_ON_ZERO: exactly what mysqldump's header sets.
+     *     Without it a legitimate 0 in an AUTO_INCREMENT column is silently
+     *     replaced by the next sequence value on the way back in.
+     *   - FOREIGN_KEY_CHECKS=0: tables come back in an arbitrary order, so a
+     *     child table is created and filled before its parent exists.
+     *
+     * Deliberately absent: TIME_ZONE. mysqldump converts TIMESTAMP values to
+     * UTC and its header sets +00:00 to convert them back; the PDO dump reads
+     * them in the server's own zone, so forcing a zone here would shift every
+     * timestamp of a PDO-written archive. Archives that need it carry the
+     * statement themselves and it is replayed with the rest.
+     */
+    protected function openMysqlRestoreSession(\PDO $pdo, array $c): void
+    {
+        $pdo->exec('SET NAMES '.$pdo->quote((string) ($c['charset'] ?? 'utf8mb4')));
+        $pdo->exec("SET SESSION SQL_MODE='NO_AUTO_VALUE_ON_ZERO'");
+        $pdo->exec('SET SESSION FOREIGN_KEY_CHECKS=0');
+    }
+
+    /**
+     * Put the foreign key checks back, whatever the restore did.
+     *
+     * Called from a finally block: a connection pooled by a long-running worker
+     * must not be handed to the next job with its integrity checks off. A
+     * failure here is not worth masking the restore error that caused it.
+     */
+    protected function closeMysqlRestoreSession(\PDO $pdo): void
+    {
+        try {
+            $pdo->exec('SET SESSION FOREIGN_KEY_CHECKS=1');
+        } catch (\Throwable $e) {
+            Log::warning('[Vanguard:mysql restore-pdo] Could not restore FOREIGN_KEY_CHECKS on the session', [
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Shorten a statement for an error message.
+     *
+     * A failing multi-row INSERT can be a megabyte; the head and the tail say
+     * which statement it was, and the whole of it in a log line says nothing
+     * anybody will read.
+     */
+    protected function abbreviateStatement(string $statement): string
+    {
+        $statement = trim($statement);
+
+        if (strlen($statement) <= self::PDO_ERROR_STATEMENT_CHARS) {
+            return $statement;
+        }
+
+        return substr($statement, 0, self::PDO_ERROR_STATEMENT_CHARS - 120)
+            .sprintf("\n  … [%d bytes omitted] …\n", strlen($statement) - self::PDO_ERROR_STATEMENT_CHARS + 20)
+            .substr($statement, -100);
+    }
+
+    /**
+     * Say — in the log and on the console — that the slow path is being taken.
+     *
+     * No credential goes in: the message names the binary that is missing and
+     * the database, nothing else.
+     *
+     * @param  array  $c  Laravel MySQL connection config
+     * @param  string  $binary  The mysql client path that was looked for
+     */
+    protected function announcePdoRestore(array $c, string $binary): void
+    {
+        $message = "[Vanguard:mysql restore] The mysql client [{$binary}] is not available on this host — "
+            .'restoring through PHP/PDO instead. This replays the dump statement by statement and is '
+            .'considerably slower than the client: install mariadb-client or default-mysql-client, or set '
+            .'vanguard.binaries.mysql, to take the fast path.';
+
+        Log::warning($message, ['database' => $c['database'] ?? null]);
+
+        if (app()->runningInConsole()) {
+            $this->consoleOutput()->writeln("<comment>{$message}</comment>");
+        }
+    }
+
+    /**
+     * Where console announcements go. Overridable so tests can read them.
+     */
+    protected function consoleOutput(): OutputInterface
+    {
+        return new ConsoleOutput;
     }
 
     /**
@@ -797,6 +985,13 @@ class DatabaseDriver
      *   2. Auto-detection from common system locations
      *   3. Fall back to the bare binary name (relies on PATH)
      *
+     * A configured path is the answer even when nothing is there. It used to be
+     * silently ignored in favour of auto-detection, which meant an operator who
+     * pinned a path got a different binary than the one they named and no word
+     * about it — and it made the one case that matters, "the client is not
+     * installed", impossible to state. Whether the path exists is
+     * binaryAvailable()'s question, and every caller asks it.
+     *
      * @param  string  $binary  Binary name: 'mysqldump', 'mysql', 'pg_dump', 'psql'
      * @return string Absolute path or bare name
      */
@@ -804,8 +999,9 @@ class DatabaseDriver
     {
         // 1. Explicit config override
         $configured = config("vanguard.binaries.{$binary}");
-        if ($configured && file_exists($configured) && is_executable($configured)) {
-            return $configured;
+
+        if (is_string($configured) && trim($configured) !== '') {
+            return trim($configured);
         }
 
         // 2. Auto-detect from common locations
