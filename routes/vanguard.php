@@ -6,6 +6,7 @@ use SoftArtisan\Vanguard\Http\Controllers\BackupsApiController;
 use SoftArtisan\Vanguard\Http\Controllers\DashboardController;
 use SoftArtisan\Vanguard\Http\Controllers\HealthController;
 use SoftArtisan\Vanguard\Http\Controllers\MaintenanceApiController;
+use SoftArtisan\Vanguard\Http\Controllers\OperationsApiController;
 use SoftArtisan\Vanguard\Http\Controllers\RestoresApiController;
 use SoftArtisan\Vanguard\Http\Controllers\SseController;
 use SoftArtisan\Vanguard\Http\Middleware\VanguardAuthenticate;
@@ -29,6 +30,11 @@ Route::middleware([VanguardAuthenticate::class])->group(function () {
             Route::get('/restores', [RestoresApiController::class, 'index'])->name('restores.index');
             Route::get('/restores/{id}', [RestoresApiController::class, 'show'])->name('restores.show')
                 ->where('id', '[0-9]+');
+            // What is running now. A read of two tables and one queue depth —
+            // no probe writes anything, unlike /health — so it sits with the
+            // ordinary reads, which is also what a screen left open during an
+            // incident needs: it is polled.
+            Route::get('/operations', [OperationsApiController::class, 'show'])->name('operations');
             Route::get('/stream', [SseController::class, 'stream'])->name('stream');
         });
 
