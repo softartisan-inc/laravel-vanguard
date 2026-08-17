@@ -65,6 +65,9 @@ class VanguardRestoreCommand extends Command
             return self::FAILURE;
         }
 
+        $reached = $record->reachedDestinations();
+        $source = $this->option('source') ?: array_key_first($reached);
+
         $this->warn('⚠️  You are about to restore a backup. This will overwrite existing data.');
         $this->table(['Field', 'Value'], [
             ['ID',       $record->id],
@@ -73,6 +76,8 @@ class VanguardRestoreCommand extends Command
             ['Created',  $record->created_at->toDateTimeString()],
             ['Size',     $record->file_size_human],
             ['Status',   $record->status],
+            ['Stored on', $reached !== [] ? implode(', ', array_keys($reached)) : '<fg=red>nowhere</>'],
+            ['Reads from', $source ?? '<fg=red>nothing — this archive reached no destination</>'],
             ['Writes to', $targetDatabase ?? "the target's own database"],
         ]);
 

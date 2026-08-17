@@ -2,9 +2,10 @@
 
 namespace SoftArtisan\Vanguard\Models;
 
-use Illuminate\Database\Eloquent\Casts\AsArrayObject;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Prunable;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 
 class BackupRecord extends Model
@@ -33,11 +34,11 @@ class BackupRecord extends Model
     ];
 
     protected $casts = [
-        'sources'      => 'array',
+        'sources' => 'array',
         'destinations' => 'array',
-        'meta'         => 'array',
-        'file_size'    => 'integer',
-        'started_at'   => 'datetime',
+        'meta' => 'array',
+        'file_size' => 'integer',
+        'started_at' => 'datetime',
         'completed_at' => 'datetime',
     ];
 
@@ -46,9 +47,8 @@ class BackupRecord extends Model
     /**
      * Scope to backups belonging to a specific tenant.
      *
-     * @param  \Illuminate\Database\Eloquent\Builder  $query
-     * @param  string  $tenantId
-     * @return \Illuminate\Database\Eloquent\Builder
+     * @param  Builder  $query
+     * @return Builder
      */
     public function scopeForTenant($query, string $tenantId)
     {
@@ -58,8 +58,8 @@ class BackupRecord extends Model
     /**
      * Scope to landlord (non-tenant) backups only.
      *
-     * @param  \Illuminate\Database\Eloquent\Builder  $query
-     * @return \Illuminate\Database\Eloquent\Builder
+     * @param  Builder  $query
+     * @return Builder
      */
     public function scopeLandlord($query)
     {
@@ -69,8 +69,8 @@ class BackupRecord extends Model
     /**
      * Scope to successfully completed backups.
      *
-     * @param  \Illuminate\Database\Eloquent\Builder  $query
-     * @return \Illuminate\Database\Eloquent\Builder
+     * @param  Builder  $query
+     * @return Builder
      */
     public function scopeCompleted($query)
     {
@@ -80,8 +80,8 @@ class BackupRecord extends Model
     /**
      * Scope to backups currently in progress.
      *
-     * @param  \Illuminate\Database\Eloquent\Builder  $query
-     * @return \Illuminate\Database\Eloquent\Builder
+     * @param  Builder  $query
+     * @return Builder
      */
     public function scopeRunning($query)
     {
@@ -91,8 +91,8 @@ class BackupRecord extends Model
     /**
      * Scope to failed backups.
      *
-     * @param  \Illuminate\Database\Eloquent\Builder  $query
-     * @return \Illuminate\Database\Eloquent\Builder
+     * @param  Builder  $query
+     * @return Builder
      */
     public function scopeFailed($query)
     {
@@ -105,16 +105,16 @@ class BackupRecord extends Model
      * Get the human-readable file size (e.g. "4.2 MB").
      *
      * Returns '—' when no file size is recorded.
-     *
-     * @return string
      */
     public function getFileSizeHumanAttribute(): string
     {
-        if (! $this->file_size) return '—';
+        if (! $this->file_size) {
+            return '—';
+        }
 
         $units = ['B', 'KB', 'MB', 'GB', 'TB'];
         $bytes = $this->file_size;
-        $unit  = 0;
+        $unit = 0;
 
         while ($bytes >= 1024 && $unit < count($units) - 1) {
             $bytes /= 1024;
@@ -128,32 +128,72 @@ class BackupRecord extends Model
      * Get a human-readable duration string (e.g. "1m 23s").
      *
      * Returns null when start or end timestamps are not available.
-     *
-     * @return string|null
      */
     public function getDurationAttribute(): ?string
     {
-        if (! $this->started_at || ! $this->completed_at) return null;
+        if (! $this->started_at || ! $this->completed_at) {
+            return null;
+        }
         $seconds = abs($this->completed_at->diffInSeconds($this->started_at));
-        if ($seconds < 60) return "{$seconds}s";
+        if ($seconds < 60) {
+            return "{$seconds}s";
+        }
         $minutes = floor($seconds / 60);
-        $secs    = $seconds % 60;
+        $secs = $seconds % 60;
+
         return "{$minutes}m {$secs}s";
     }
 
     // ─── Status helpers ───────────────────────────────────────
 
     /** @return bool Whether the backup completed successfully. */
-    public function isCompleted(): bool { return $this->status === 'completed'; }
+    public function isCompleted(): bool
+    {
+        return $this->status === 'completed';
+    }
 
     /** @return bool Whether the backup is currently running. */
-    public function isRunning(): bool   { return $this->status === 'running'; }
+    public function isRunning(): bool
+    {
+        return $this->status === 'running';
+    }
 
     /** @return bool Whether the backup failed. */
-    public function isFailed(): bool    { return $this->status === 'failed'; }
+    public function isFailed(): bool
+    {
+        return $this->status === 'failed';
+    }
 
     /** @return bool Whether the backup is queued and not yet started. */
-    public function isPending(): bool   { return $this->status === 'pending'; }
+    public function isPending(): bool
+    {
+        return $this->status === 'pending';
+    }
+
+    /**
+     * The destinations this archive actually reached, ordered local → remote
+     * → ftp and keyed by name.
+     *
+     * `file_path` / `remote_path` / `ftp_path` name where a copy landed, but
+     * are recorded independently of the destination's current configuration:
+     * a destination can be enabled and still hold no path (it was reached by
+     * nothing, or it failed while another destination succeeded), or hold a
+     * path while now disabled (it was reached before the setting changed).
+     * This is the one place that turns those three columns into "where is
+     * the archive", so `vanguard:list`, `vanguard:backup` and
+     * `vanguard:restore` agree on the answer instead of each filtering the
+     * columns its own way.
+     *
+     * @return array<string, string> Destination name => stored path, only the destinations reached
+     */
+    public function reachedDestinations(): array
+    {
+        return array_filter([
+            'local' => $this->file_path,
+            'remote' => $this->remote_path,
+            'ftp' => $this->ftp_path,
+        ]);
+    }
 
     // ─── Prunable ─────────────────────────────────────────────
 
@@ -163,13 +203,14 @@ class BackupRecord extends Model
      * Records older than the configured retention period (vanguard.retention.days)
      * and with a 'completed' status are eligible for pruning.
      *
-     * @return \Illuminate\Database\Eloquent\Builder
+     * @return Builder
      */
     public function prunable()
     {
         $days = config('vanguard.retention.days', 30);
+
         return static::where('created_at', '<=', now()->subDays($days))
-                     ->where('status', 'completed');
+            ->where('status', 'completed');
     }
 
     /**
@@ -197,7 +238,7 @@ class BackupRecord extends Model
                     ->delete($this->ftp_path);
             }
         } catch (\Throwable $e) {
-            \Illuminate\Support\Facades\Log::warning(
+            Log::warning(
                 "[Vanguard] Could not delete file during model pruning for record #{$this->id}: ".$e->getMessage()
             );
         }

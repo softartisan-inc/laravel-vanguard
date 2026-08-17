@@ -42,19 +42,42 @@ class VanguardListCommand extends Command
         }
 
         $this->table(
-            ['ID', 'Type', 'Tenant', 'Status', 'Size', 'Duration', 'Created At'],
+            ['ID', 'Type', 'Tenant', 'Status', 'Size', 'Stored on', 'Duration', 'Created At'],
             $records->map(fn ($r) => [
                 $r->id,
                 $r->type,
                 $r->tenant_id ?? 'landlord',
                 $this->colorStatus($r->status),
                 $r->file_size_human,
+                $this->storedOn($r),
                 $r->duration ?? '—',
                 $r->created_at->toDateTimeString(),
             ])->toArray(),
         );
 
         return self::SUCCESS;
+    }
+
+    /**
+     * The destinations an archive actually reached, local → remote → ftp.
+     *
+     * The listing carried no such column, so the whole command could describe
+     * a shelf of backups without ever saying where any of them is — the same
+     * blind spot as `vanguard:backup` printing only the local path. A
+     * completed record that reached nothing is called out rather than shown as
+     * a dash: it means the archive does not exist.
+     *
+     * @param  mixed  $record  A BackupRecord instance
+     */
+    protected function storedOn(mixed $record): string
+    {
+        $reached = array_keys($record->reachedDestinations());
+
+        if ($reached !== []) {
+            return implode(', ', $reached);
+        }
+
+        return $record->isCompleted() ? '<fg=red>nowhere</>' : '—';
     }
 
     /**

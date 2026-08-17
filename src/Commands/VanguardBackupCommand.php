@@ -168,9 +168,51 @@ class VanguardBackupCommand extends Command
 
         $this->info("  ✅ Completed in {$record->duration}");
         $this->line("     Size     : {$record->file_size_human}");
-        $this->line("     Path     : {$record->file_path}");
+        $this->printDestinations($record);
         $this->line("     Checksum : {$record->checksum}");
         $this->printEmptyFilesystemWarning($record);
+    }
+
+    /**
+     * Say on the console where the archive actually landed.
+     *
+     * A single "Path :" line named the local copy, which does not exist on
+     * the setup the documentation recommends (`VANGUARD_LOCAL_ENABLED=false`,
+     * remote only) — the operator was given a size and a checksum for a file
+     * they had no way to find. Every destination the archive reached is
+     * listed now, local → remote → ftp; a destination enabled in
+     * configuration but absent from the record is named "not reached" rather
+     * than silently dropped, so a partial failure (one destination wrote,
+     * another did not) is visible too. A completed record that reached none
+     * of them is not a partial failure — it is a catalogue entry with no
+     * archive behind it, and gets a line nobody can read past instead of
+     * blending into the destination list.
+     *
+     * @param  mixed  $record  A BackupRecord instance
+     */
+    protected function printDestinations(mixed $record): void
+    {
+        $reached = $record->reachedDestinations();
+
+        $enabled = [
+            'local' => config('vanguard.destinations.local.enabled', true),
+            'remote' => config('vanguard.destinations.remote.enabled', false),
+            'ftp' => config('vanguard.destinations.ftp.enabled', false),
+        ];
+
+        foreach ($enabled as $destination => $isEnabled) {
+            if (! $isEnabled && ! isset($reached[$destination])) {
+                continue;
+            }
+
+            $label = str_pad(ucfirst($destination), 9);
+            $value = $reached[$destination] ?? '<fg=yellow>not reached</>';
+            $this->line("     {$label}: {$value}");
+        }
+
+        if ($reached === []) {
+            $this->error('  ⚠️  This archive reached NO destination at all — there is no file behind this record.');
+        }
     }
 
     /**
