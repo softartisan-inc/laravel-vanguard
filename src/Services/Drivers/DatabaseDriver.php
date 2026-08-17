@@ -25,6 +25,111 @@ class DatabaseDriver
     protected const PDO_ERROR_STATEMENT_CHARS = 800;
 
     /**
+     * The client each driver's dump and restore actually shells out to, and
+     * what happens when it is missing.
+     *
+     * 'pdo' means this package carries a PHP fallback for both operations of
+     * that driver; 'none' means the operation is impossible without the binary.
+     * PostgreSQL has neither fallback, and saying otherwise on the health
+     * screen would be the same kind of lie the screen exists to end.
+     */
+    protected const CLIENTS = [
+        'mysql' => ['dump' => 'mysqldump', 'restore' => 'mysql', 'fallback' => 'pdo'],
+        'mariadb' => ['dump' => 'mysqldump', 'restore' => 'mysql', 'fallback' => 'pdo'],
+        'pgsql' => ['dump' => 'pg_dump', 'restore' => 'psql', 'fallback' => 'none'],
+        'sqlite' => ['dump' => 'gzip', 'restore' => 'gunzip', 'fallback' => 'none'],
+    ];
+
+    /**
+     * Where a client binary is looked for, and whether it is there.
+     *
+     * The single answer to "is that binary installed": the health screen, the
+     * install command and the dump and restore paths all ask it here, so the
+     * screen cannot say one thing and the backup do another.
+     *
+     * @param  string  $binary  'mysqldump', 'mysql', 'pg_dump', 'psql', 'gzip', …
+     * @return array{client: string, path: string, present: bool}
+     */
+    public function clientStatus(string $binary): array
+    {
+        $path = $this->resolveBinary($binary);
+
+        return [
+            'client' => $binary,
+            'path' => $path,
+            'present' => $this->binaryAvailable($path),
+        ];
+    }
+
+    /**
+     * What a dump and a restore of this driver would actually do on this host.
+     *
+     * 'via' is the path each operation would take — 'client', 'pdo' or 'none'
+     * — which is the answer nobody had in August 2026: the image had no mysql
+     * client, backups took the PDO path and went green every night, and the
+     * archives were unrestorable on the host that wrote them.
+     *
+     * @param  string  $driver  'mysql'|'mariadb'|'pgsql'|'sqlite'
+     * @return array<string, mixed>
+     */
+    public function clientReport(string $driver): array
+    {
+        $clients = self::CLIENTS[$driver] ?? null;
+
+        if ($clients === null) {
+            return [
+                'driver' => $driver,
+                'dump' => null,
+                'restore' => null,
+                'ok' => false,
+                'degraded' => false,
+                'reason' => "Unsupported DB driver: [{$driver}]. Vanguard can neither back it up nor restore it.",
+            ];
+        }
+
+        $reasons = [];
+        $operations = [];
+
+        foreach (['dump', 'restore'] as $operation) {
+            $status = $this->clientStatus($clients[$operation]);
+            $status['via'] = $status['present'] ? 'client' : $clients['fallback'];
+
+            if (! $status['present']) {
+                $reasons[] = $status['via'] === 'pdo'
+                    ? sprintf(
+                        'The %s client is not installed (looked for [%s]): the %s runs through PHP/PDO instead. '
+                        .'That works, and is considerably slower on a large database — install mariadb-client or '
+                        .'default-mysql-client to take the fast path.',
+                        $status['client'],
+                        $status['path'],
+                        $operation,
+                    )
+                    : sprintf(
+                        'The %s client is not installed (looked for [%s]) and there is no PHP fallback for it: '
+                        .'the %s is impossible on this host.',
+                        $status['client'],
+                        $status['path'],
+                        $operation,
+                    );
+            }
+
+            $operations[$operation] = $status;
+        }
+
+        $ok = $operations['dump']['via'] !== 'none' && $operations['restore']['via'] !== 'none';
+
+        return [
+            'driver' => $driver,
+            'dump' => $operations['dump'],
+            'restore' => $operations['restore'],
+            'ok' => $ok,
+            // Possible, but not on the path this installation should be on.
+            'degraded' => $ok && ($operations['dump']['via'] === 'pdo' || $operations['restore']['via'] === 'pdo'),
+            'reason' => $reasons === [] ? null : implode(' ', $reasons),
+        ];
+    }
+
+    /**
      * Dump a database to a gzipped SQL file.
      *
      * @param  string  $driver  'mysql'|'mariadb'|'pgsql'|'sqlite'

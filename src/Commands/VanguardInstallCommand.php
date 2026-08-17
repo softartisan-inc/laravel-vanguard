@@ -3,6 +3,7 @@
 namespace SoftArtisan\Vanguard\Commands;
 
 use Illuminate\Console\Command;
+use SoftArtisan\Vanguard\Services\Drivers\DatabaseDriver;
 
 class VanguardInstallCommand extends Command
 {
@@ -217,9 +218,18 @@ class VanguardInstallCommand extends Command
     /**
      * Check for required system tools and warn about any that are missing.
      *
-     * Verifies that tar, gzip, mysqldump, and pg_dump are available on the
-     * system PATH. Missing tools do not abort the installation but will cause
-     * backup operations to fail at runtime.
+     * Both clients of each database are checked, not only the dump one: an
+     * installation that can write an archive and not put it back is the
+     * August 2026 incident, and it used to pass this check in silence because
+     * only mysqldump and pg_dump were looked for.
+     *
+     * The lookup is the driver's own (DatabaseDriver::clientStatus), so this
+     * command, the health screen and the backup itself cannot disagree about
+     * whether a binary is there — including when an operator has pinned one in
+     * vanguard.binaries.
+     *
+     * Missing tools do not abort the installation but will change, or stop,
+     * what backups and restores can do at runtime.
      */
     protected function checkSystemRequirements(): void
     {
@@ -228,29 +238,32 @@ class VanguardInstallCommand extends Command
         $tools = [
             'tar' => 'Required for bundling backup archives.',
             'gzip' => 'Required for compressing backup files.',
-            'mysqldump' => 'Required for MySQL database backups.',
-            'pg_dump' => 'Required for PostgreSQL database backups.',
+            'mysqldump' => 'MySQL/MariaDB backups — without it they run through PHP/PDO instead, which is slower.',
+            'mysql' => 'MySQL/MariaDB restores — without it they run through PHP/PDO instead, which is slower.',
+            'pg_dump' => 'PostgreSQL backups — there is NO PHP fallback: without it they are impossible.',
+            'psql' => 'PostgreSQL restores — there is NO PHP fallback: without it they are impossible.',
         ];
 
+        $driver = app(DatabaseDriver::class);
         $missing = [];
 
         foreach ($tools as $tool => $reason) {
-            exec('which '.escapeshellarg($tool).' 2>/dev/null', $output, $code);
-            $output = [];
+            $status = $driver->clientStatus($tool);
 
-            if ($code !== 0) {
-                $missing[] = [$tool, $reason];
+            if (! $status['present']) {
+                $missing[] = [$tool, $reason, $status['path']];
             }
         }
 
         if (empty($missing)) {
             $this->line('   <info>All system tools found.</info>');
         } else {
-            foreach ($missing as [$tool, $reason]) {
-                $this->warn("   [missing] {$tool} — {$reason}");
+            foreach ($missing as [$tool, $reason, $path]) {
+                $this->warn("   [missing] {$tool} (looked for [{$path}]) — {$reason}");
             }
             $this->newLine();
             $this->warn('Some system tools are not installed. Install them before running backups.');
+            $this->warn('The dashboard health screen reports the same thing, per driver, at any time.');
         }
 
         $this->newLine();

@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Storage;
 use SoftArtisan\Vanguard\Console\VanguardScheduler;
 use SoftArtisan\Vanguard\Http\Concerns\ProbesQueueDepth;
 use SoftArtisan\Vanguard\Models\BackupRecord;
+use SoftArtisan\Vanguard\Services\Drivers\DatabaseDriver;
 use SoftArtisan\Vanguard\Services\TenancyResolver;
 use SoftArtisan\Vanguard\Vanguard;
 
@@ -34,6 +35,7 @@ class HealthController extends Controller
     {
         return response()->json([
             'destinations' => $this->destinations(),
+            'database_clients' => $this->databaseClients(),
             'alerts' => $this->alerts(),
             'schedule' => $this->schedule(),
             'queue' => $this->queue(),
@@ -149,6 +151,85 @@ class HealthController extends Controller
                 ]);
             }
         }
+    }
+
+    // ─── Database clients ─────────────────────────────────────────
+
+    /**
+     * Whether this host can put an archive back, not only write one.
+     *
+     * A destination row says the archive can be stored. It says nothing about
+     * the binaries the dump and the restore shell out to — and in August 2026
+     * that was the whole incident: an image with PHP extensions and no
+     * database client, backups green every night through the PDO dump
+     * fallback, and every archive on the shelf unrestorable on the host that
+     * wrote it. The first proof was an operator's failed restore.
+     *
+     * So each driver Vanguard would actually dump is reported with both its
+     * clients and the path each operation would take. The binaries are looked
+     * for by the driver itself (DatabaseDriver::clientStatus), never by a
+     * second answer of this controller's own.
+     *
+     * @return list<array<string, mixed>>
+     */
+    protected function databaseClients(): array
+    {
+        $driver = app(DatabaseDriver::class);
+        $rows = [];
+
+        foreach ($this->backupConnections() as $connection) {
+            $config = config("database.connections.{$connection}");
+            $name = is_array($config) ? ($config['driver'] ?? null) : null;
+
+            // A connection that is not declared is somebody else's alarm — the
+            // backup itself fails loudly on it — and it must not blank this
+            // section on the way past.
+            if (! is_string($name) || $name === '') {
+                continue;
+            }
+
+            $rows[$name] ??= $driver->clientReport($name) + ['connections' => []];
+            $rows[$name]['connections'][] = $connection;
+        }
+
+        return array_values($rows);
+    }
+
+    /**
+     * The connections whose databases end up in a backup.
+     *
+     * The same two lookups TenancyResolver makes when a backup runs — the
+     * central connection, and the tenant template when tenancy is on — so this
+     * screen reports the drivers that are really used rather than every
+     * connection the application happens to declare.
+     *
+     * @return list<string>
+     */
+    protected function backupConnections(): array
+    {
+        $connections = [];
+
+        $central = config('tenancy.database.central_connection', config('database.default'));
+
+        if (is_string($central) && $central !== '') {
+            $connections[] = $central;
+        }
+
+        try {
+            if ($this->tenancy->isEnabled()) {
+                $tenant = config('tenancy.database.tenant_connection_name', 'tenant');
+
+                if (is_string($tenant) && $tenant !== '') {
+                    $connections[] = $tenant;
+                }
+            }
+        } catch (\Throwable $e) {
+            Log::warning('[Vanguard] Could not resolve the tenant connection for the client check', [
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        return array_values(array_unique($connections));
     }
 
     // ─── Alerts ───────────────────────────────────────────────────
