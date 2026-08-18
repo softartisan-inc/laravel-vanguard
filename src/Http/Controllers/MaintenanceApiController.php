@@ -7,6 +7,7 @@ use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
 use SoftArtisan\Vanguard\Http\Concerns\GuardsDestructiveActions;
 use SoftArtisan\Vanguard\Services\BackupStorageManager;
+use SoftArtisan\Vanguard\Services\StaleRunReaper;
 
 class MaintenanceApiController extends Controller
 {
@@ -77,6 +78,11 @@ class MaintenanceApiController extends Controller
         return response()->json([
             'removed' => $this->store->cleanOrphanedTmp($hours),
             'hours' => $hours,
+            // The rows a killed worker left saying `running` are the other half
+            // of the same crash, and the command sweeps both. Leaving them to
+            // the CLI would make the same wording mean two different things on
+            // the two surfaces.
+            'reclaimed' => app(StaleRunReaper::class)->reap(),
         ]);
     }
 }

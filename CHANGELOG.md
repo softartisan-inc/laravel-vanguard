@@ -7,6 +7,59 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
+## [Unreleased]
+
+### A killed worker no longer leaves a green row behind
+
+On 2026-08-18 the preprod scheduler ran four Vanguard commands at 00:00 —
+`backup --landlord`, `backup --all-tenants`, `prune`, `cleanup-tmp` — each one
+dispatched with `runInBackground()`, so each one forked its own PHP process
+within the same second. The container was capped at 256M. The OOM killer took
+the run down three seconds in, the container restarted, and nothing reached the
+destination.
+
+The archive being lost is the ordinary half. The half worth a release is what
+the loss looked like afterwards: the backup row stayed `status = running` for
+ever, because the only code that writes an ending is code that survives to run
+it. The dashboard rendered work in progress, the freshness probe still saw a
+recent row, and no notification was sent. An operator reading the screen that
+morning was told everything was fine about an archive that does not exist.
+
+`StaleRunReaper` closes those rows. Past `vanguard.queue.timeout` — the point
+where the queue itself has given up on the job, so the row can no longer move on
+its own — a `running` backup or restore is marked `failed`, given a reason
+naming the timeout it exceeded, and pushed through the **existing**
+`BackupFailed` / `RestoreFailed` events. That last part is the whole point: the
+reclaim reaches the very notification channels a real failure would have used.
+A row closed without travelling that path would be just as silent as one left
+open.
+
+- Anchors on `started_at`, falling back to `created_at`. A process killed
+  between the INSERT and the `started_at` stamp would otherwise have no anchor
+  at all and stay `running` for ever — the exact state this exists to end.
+- `VANGUARD_QUEUE_TIMEOUT=0` disables the sweep. Same convention the operations
+  console already uses: 0 means "no timeout", not "everything is dead".
+- Runs from `vanguard:cleanup-tmp`, which already sweeps the tmp directories the
+  same crash leaves behind, and is the only Vanguard command scheduled between
+  two backups. Two halves of one crash, one sweep.
+- Runs from `POST /vanguard/api/cleanup-tmp` too, which reports it as
+  `reclaimed: {backups, restores}`. The endpoint's contract is parity with the
+  command; without this the same wording would mean two different things
+  depending on the surface.
+
+The operations console has reported this state as a `stalled` warning since
+2.3.0. Reporting it in a screen nobody is watching at 3 a.m. is not the same as
+closing the row and raising the alarm.
+
+**What this does not do.** It does not stop the kill. Scheduling every command
+on the same minute is what put five PHP processes in one container at once, and
+that is fixed where the crons are declared, not here — spread
+`VANGUARD_SCHEDULE_CRON` and the housekeeping crons across distinct minutes, and
+keep the short housekeeping commands out of `runInBackground()`. This release
+only guarantees that when a worker is killed anyway, you are told.
+
+---
+
 ## [2.4.1] — 2026-08-17
 
 A production restore failed with `sh: 1: mysql: not found`, and the error was
