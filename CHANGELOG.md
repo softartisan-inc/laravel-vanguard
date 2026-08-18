@@ -7,7 +7,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
-## [Unreleased]
+## [2.5.0] — 2026-08-18
 
 ### A killed worker no longer leaves a green row behind
 
@@ -50,6 +50,21 @@ open.
 The operations console has reported this state as a `stalled` warning since
 2.3.0. Reporting it in a screen nobody is watching at 3 a.m. is not the same as
 closing the row and raising the alarm.
+
+**Expect the first sweep to be loud, and read what it says.** Every row that has
+been stuck since before this release is closed on the first run, each one
+raising a failure notification. That is not a fault of the upgrade — those are
+real failures that were never reported — but somebody watching the mailbox will
+read a burst of alerts as an outage in progress. On the installation this was
+built for, the first sweep found two tenant backups that had been sitting at
+`running` since **22 March 2026**: 149 days of a screen saying "in progress"
+about work that died the same evening. Look at the dates before you conclude
+anything is on fire.
+
+**And check `VANGUARD_NOTIFY_MAIL` before upgrading, not after.** The reclaim
+routes through the ordinary failure notification, so an installation with no
+recipient configured closes its stale rows in exactly the silence this release
+exists to break. On that same installation the recipient was `NULL`.
 
 **What this does not do.** It does not stop the kill. Scheduling every command
 on the same minute is what put five PHP processes in one container at once, and
