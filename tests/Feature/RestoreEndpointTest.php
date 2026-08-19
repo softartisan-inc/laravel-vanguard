@@ -194,4 +194,42 @@ class RestoreEndpointTest extends TestCase
                 && $context['backup_id'] === $backup->id,
         );
     }
+
+    #[Test]
+    public function each_request_records_the_operator_who_made_it(): void
+    {
+        $backup = $this->makeRecord(['type' => 'tenant', 'tenant_id' => '9001']);
+
+        // Held in an object so the resolver reads it at call time, the way a
+        // real one reads whoever is authenticated on this request. An arrow
+        // function would capture the value at registration and prove nothing.
+        $current = new \ArrayObject(['actor' => 'alice@in-immo.app']);
+        Vanguard::restoreActor(fn () => $current['actor']);
+
+        $this->postJson("/vanguard/api/backups/{$backup->id}/restore", ['confirm' => '9001'])
+            ->assertStatus(202);
+
+        $current['actor'] = 'bob@in-immo.app';
+
+        $this->postJson("/vanguard/api/backups/{$backup->id}/restore", ['confirm' => '9001'])
+            ->assertStatus(202);
+
+        // Resolved per request, not once. A resolver whose first answer were
+        // cached would attribute every later restore to whoever happened to
+        // click first, which is worse than recording nobody.
+        $this->assertSame(
+            ['alice@in-immo.app', 'bob@in-immo.app'],
+            RestoreRecord::orderBy('id')->pluck('requested_by')->all(),
+        );
+    }
+
+    #[Test]
+    public function a_restore_asked_through_the_endpoint_is_marked_as_coming_from_the_api(): void
+    {
+        $backup = $this->makeRecord(['type' => 'tenant', 'tenant_id' => '9001']);
+
+        $response = $this->postJson("/vanguard/api/backups/{$backup->id}/restore", ['confirm' => '9001']);
+
+        $this->assertSame('api', RestoreRecord::findOrFail($response->json('restore_id'))->origin);
+    }
 }
