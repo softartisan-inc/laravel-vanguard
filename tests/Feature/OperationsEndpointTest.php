@@ -161,4 +161,21 @@ class OperationsEndpointTest extends TestCase
         // screen rather than becoming a dump.
         $this->assertSame(50, OperationsApiController::MAX_ROWS);
     }
+
+    #[Test]
+    public function a_running_rehearsal_is_not_shown_as_a_restore_of_the_target(): void
+    {
+        $this->makeRestore([
+            'type' => 'tenant',
+            'tenant_id' => '9001',
+            'status' => 'running',
+            'target_database' => 'vanguard_rehearsal',
+            'started_at' => now()->subMinute(),
+        ]);
+
+        // "Restoring tenant 9001" on screen, for a run writing to a throwaway
+        // database, is a line that starts an incident that is not happening.
+        $this->getJson('/vanguard/api/operations')->assertOk()
+            ->assertJsonPath('running.restores.0.target_database', 'vanguard_rehearsal');
+    }
 }

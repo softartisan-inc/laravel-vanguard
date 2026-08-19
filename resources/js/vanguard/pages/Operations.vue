@@ -73,7 +73,16 @@
             <tbody>
               <tr v-for="row in running" :key="`${row.kind}-${row.id}`">
                 <td><span class="tag" :class="`tag-${row.kind}`">{{ row.kind }}</span> <span class="row-id">#{{ row.id }}</span></td>
-                <td :class="row.tenant_id ? 'col-tenant' : 'col-landlord'">{{ row.target }}</td>
+                <td :class="row.tenant_id ? 'col-tenant' : 'col-landlord'">
+                  {{ row.target }}
+                  <!-- A rehearsal writes to a throwaway database. Unlabelled,
+                       this line reads as the target being overwritten. -->
+                  <span
+                    v-if="row.target_database"
+                    class="tag tag-filesystem"
+                    :title="`Rehearsal: writing to ${row.target_database}, not to the target's own database`"
+                  >Rehearsal</span>
+                </td>
                 <!-- A restore holds one status for minutes while moving
                      through five phases; without this the screen looks hung. -->
                 <td>{{ row.phase || '—' }}</td>
@@ -106,7 +115,16 @@
             <tbody>
               <tr v-for="row in waiting" :key="`${row.kind}-${row.id}`" :class="{ 'row-stale': stale(row) }">
                 <td><span class="tag" :class="`tag-${row.kind}`">{{ row.kind }}</span> <span class="row-id">#{{ row.id }}</span></td>
-                <td :class="row.tenant_id ? 'col-tenant' : 'col-landlord'">{{ row.target }}</td>
+                <td :class="row.tenant_id ? 'col-tenant' : 'col-landlord'">
+                  {{ row.target }}
+                  <!-- A rehearsal writes to a throwaway database. Unlabelled,
+                       this line reads as the target being overwritten. -->
+                  <span
+                    v-if="row.target_database"
+                    class="tag tag-filesystem"
+                    :title="`Rehearsal: writing to ${row.target_database}, not to the target's own database`"
+                  >Rehearsal</span>
+                </td>
                 <td class="ops-elapsed">{{ duration(live(row.waiting_seconds)) }}</td>
                 <td class="col-date">{{ row.created_at ? formatTime(row.created_at) : '—' }}</td>
               </tr>
@@ -136,7 +154,16 @@
             <tbody>
               <tr v-for="row in failures" :key="`${row.kind}-${row.id}`">
                 <td><span class="tag" :class="`tag-${row.kind}`">{{ row.kind }}</span> <span class="row-id">#{{ row.id }}</span></td>
-                <td :class="row.tenant_id ? 'col-tenant' : 'col-landlord'">{{ row.target }}</td>
+                <td :class="row.tenant_id ? 'col-tenant' : 'col-landlord'">
+                  {{ row.target }}
+                  <!-- A rehearsal writes to a throwaway database. Unlabelled,
+                       this line reads as the target being overwritten. -->
+                  <span
+                    v-if="row.target_database"
+                    class="tag tag-filesystem"
+                    :title="`Rehearsal: writing to ${row.target_database}, not to the target's own database`"
+                  >Rehearsal</span>
+                </td>
                 <td class="col-date">{{ formatTime(row.completed_at || row.created_at) }}</td>
                 <!-- The exact message, not a redaction: it is what the
                      operator acts on next. -->

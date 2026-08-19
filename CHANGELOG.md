@@ -7,6 +7,72 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
+## [Unreleased]
+
+### A restore that succeeded now leaves a trace
+
+`GET /vanguard/api/restores` has answered since 2.3.0 — paginated, filterable,
+carrying the operator and the verbatim error. Nothing in the dashboard ever
+called it. The only restores an operator could see were the ones **In Progress**
+lists: running, pending, and failures from the last twenty-four hours. So a
+restore that *failed* was visible for a day, and a restore that **succeeded**
+vanished from the screen the second it finished. "Did anyone restore this, and
+did it work?" had no answer anywhere in the interface.
+
+Worse, one whole path wrote nothing at all. `vanguard:restore` called
+`RestoreService` directly: no row, no `RestoreStarted` / `RestoreCompleted` /
+`RestoreFailed`, and therefore no notification. That is the path an operator
+takes during an incident, when the dashboard is the thing that is down.
+
+- **New `Restores` screen** in the dashboard, reading the endpoint that was
+  already there: status, target, who asked, the source it read from, and the
+  exact error in a panel that stays open across live ticks.
+- **`vanguard:restore` opens a history row** before the first byte moves, marks
+  it running, records the phases, and resolves it either way — so a console
+  restore killed halfway leaves a row `StaleRunReaper` can close, instead of
+  nothing at all. It fires the same three events as the queued path, which is
+  what puts a failed console restore into the mail.
+- **`requested_by` on a console run** names the shell account and the machine
+  (`deploy@web-1`) when the application cannot name a user. Not an identity, but
+  strictly more than the `null` this column used to hold.
+- **New nullable `origin` column** — `api` or `console` — so the column that
+  answers *who* holds an identity and nothing else, instead of a channel glued
+  in front of a name. Null on rows written before it existed: a path nobody
+  recorded is not the same fact as `api`. Shown as a quiet tag beside the name
+  on the Restores screen, and carried by `/api/restores` and `/api/operations`.
+
+### Rehearsals are told apart from real restores
+
+`vanguard:restore --database=` rehearses a restore into a throwaway database.
+Recorded like any other run it reads "tenant acme, completed" — reporting data
+replaced that was never touched. A history that misreports which data was
+overwritten is worse than no history.
+
+- New nullable **`target_database`** column on `vanguard_restores`, set only by
+  that flag; null means the target's own database, which is every restore the
+  endpoint performs. Exposed by `/api/restores` and `/api/operations`, and shown
+  as a `Rehearsal` tag on both screens.
+- One additive migration adds both new columns, guarded per table and per
+  column, so it is a no-op on an installation that already carries them.
+
+### Upgrading
+
+Run `php artisan migrate` — the new column is additive and nullable, and the
+migration is a no-op on an installation that already carries it. The dashboard
+bundle is served from the package, so nothing has to be republished; an
+installation that did publish the assets should refresh its copy
+(`php artisan vendor:publish --tag=vanguard-assets --force`).
+
+An application that authenticates its dashboard on a guard other than the
+default one must say so, or `requested_by` stays null for every restore run
+from the interface:
+
+```php
+Vanguard::restoreActor(fn (): ?string => Auth::guard('ops')->user()?->email);
+```
+
+---
+
 ## [2.5.0] — 2026-08-18
 
 ### A killed worker no longer leaves a green row behind

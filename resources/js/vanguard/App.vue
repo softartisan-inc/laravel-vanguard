@@ -77,6 +77,7 @@ import { ref, computed, provide, onMounted, shallowRef } from 'vue'
 
 import Dashboard  from './pages/Dashboard.vue'
 import Backups    from './pages/Backups.vue'
+import Restores   from './pages/Restores.vue'
 import Operations from './pages/Operations.vue'
 import Tenants    from './pages/Tenants.vue'
 import RunModal   from './components/RunModal.vue'
@@ -106,6 +107,7 @@ const pages = {
   dashboard: { label: 'Dashboard',   component: Dashboard, icon: '<path d="M2 10a8 8 0 1116 0A8 8 0 012 10zm8-3a1 1 0 00-1 1v3a1 1 0 001 1h2a1 1 0 100-2H10V8a1 1 0 00-1-1z"/>' },
   operations: { label: 'In Progress', component: Operations, icon: '<path d="M10 2a8 8 0 100 16 8 8 0 000-16zm1 4a1 1 0 10-2 0v4a1 1 0 00.4.8l2.5 1.9a1 1 0 101.2-1.6L11 9.5V6z"/>' },
   backups:   { label: 'All Backups', component: Backups,   icon: '<path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/>' },
+  restores:  { label: 'Restores',    component: Restores,  icon: '<path d="M4 4a1 1 0 011 1v2.1A7 7 0 1110 17a1 1 0 110-2 5 5 0 10-4.33-7.5H8a1 1 0 110 2H4a1 1 0 01-1-1V5a1 1 0 011-1z"/>' },
   tenants:   { label: 'Tenants',     component: Tenants,   icon: '<path d="M13 6a3 3 0 11-6 0 3 3 0 016 0zm5 6a2 2 0 10-4 0 2 2 0 004 0zm-9 0a2 2 0 10-4 0 2 2 0 004 0z"/>' },
 }
 

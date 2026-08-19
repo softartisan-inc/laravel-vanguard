@@ -106,4 +106,49 @@ class RestoresEndpointTest extends TestCase
             ->assertJsonPath('data.backup_id', null)
             ->assertJsonPath('data.target', '9001');
     }
+
+    #[Test]
+    public function a_rehearsal_is_told_apart_from_a_restore_of_the_target(): void
+    {
+        $rehearsal = $this->makeRestore([
+            'type' => 'tenant',
+            'tenant_id' => '9001',
+            'status' => 'completed',
+            'target_database' => 'vanguard_rehearsal',
+        ]);
+
+        $real = $this->makeRestore([
+            'type' => 'tenant',
+            'tenant_id' => '9001',
+            'status' => 'completed',
+        ]);
+
+        // Two completed restores of the same tenant, one of which never
+        // touched that tenant's data. Reading the same on screen is what
+        // makes a history untrustworthy.
+        $this->getJson("/vanguard/api/restores/{$rehearsal->id}")->assertOk()
+            ->assertJsonPath('data.target_database', 'vanguard_rehearsal');
+
+        $this->getJson("/vanguard/api/restores/{$real->id}")->assertOk()
+            ->assertJsonPath('data.target_database', null);
+    }
+
+    #[Test]
+    public function it_says_which_path_asked_for_the_restore(): void
+    {
+        $fromApi = $this->makeRestore(['status' => 'completed', 'origin' => 'api']);
+        $fromConsole = $this->makeRestore(['status' => 'completed', 'origin' => 'console']);
+        $unknown = $this->makeRestore(['status' => 'completed']);
+
+        $this->getJson("/vanguard/api/restores/{$fromApi->id}")->assertOk()
+            ->assertJsonPath('data.origin', 'api');
+
+        $this->getJson("/vanguard/api/restores/{$fromConsole->id}")->assertOk()
+            ->assertJsonPath('data.origin', 'console');
+
+        // Rows written before the column existed came from a path nobody
+        // recorded. Null says so; guessing 'api' would invent history.
+        $this->getJson("/vanguard/api/restores/{$unknown->id}")->assertOk()
+            ->assertJsonPath('data.origin', null);
+    }
 }

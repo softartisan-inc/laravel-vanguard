@@ -167,6 +167,10 @@ tr:hover td { background: rgba(255,255,255,0.02); }
 .tag-tenant     { background: rgba(240,164,77,0.1);  color: var(--warn);    border: 1px solid rgba(240,164,77,0.2); }
 .tag-filesystem { background: rgba(167,139,250,0.1); color: var(--running); border: 1px solid rgba(167,139,250,0.2); }
 
+/* Where a restore was asked from. Deliberately quieter than the type tags:
+   it qualifies the name next to it rather than competing with it. */
+.origin-tag { margin-left: 6px; background: transparent; color: var(--dim); border: 1px solid var(--muted); }
+
 /* ── Actions ── */
 .action-row { display: flex; gap: 6px; }
 

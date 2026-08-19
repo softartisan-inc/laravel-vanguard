@@ -3,8 +3,13 @@
 namespace SoftArtisan\Vanguard\Commands;
 
 use Illuminate\Console\Command;
+use SoftArtisan\Vanguard\Events\RestoreCompleted;
+use SoftArtisan\Vanguard\Events\RestoreFailed;
+use SoftArtisan\Vanguard\Events\RestoreStarted;
 use SoftArtisan\Vanguard\Models\BackupRecord;
+use SoftArtisan\Vanguard\Models\RestoreRecord;
 use SoftArtisan\Vanguard\Services\RestoreService;
+use SoftArtisan\Vanguard\Vanguard;
 
 class VanguardRestoreCommand extends Command
 {
@@ -100,6 +105,14 @@ class VanguardRestoreCommand extends Command
             return self::SUCCESS;
         }
 
+        // Opened before the first byte moves, so a restore killed halfway
+        // still leaves a row an operator can find. Written on the same
+        // connection as the endpoint's, so both paths land in one history.
+        $restore = $this->openHistoryRow($record, $targetDatabase);
+
+        $restore->markRunning();
+        event(new RestoreStarted($restore));
+
         try {
             $restoreService->restore($record, [
                 'verify_checksum' => ! $this->option('no-verify'),
@@ -108,8 +121,14 @@ class VanguardRestoreCommand extends Command
                 'wipe_storage' => $wipeStorage,
                 'source' => $this->option('source') ?: null,
                 'database' => $targetDatabase,
-                'on_phase' => fn (string $phase, array $context = []) => $this->printPhase($phase, $context),
+                'on_phase' => function (string $phase, array $context = []) use ($restore) {
+                    $restore->markPhase($phase);
+                    $this->printPhase($phase, $context);
+                },
             ]);
+
+            $restore->markCompleted();
+            event(new RestoreCompleted($restore));
 
             $this->info($targetDatabase !== null
                 ? "✅ Restore completed successfully into [{$targetDatabase}]."
@@ -117,10 +136,65 @@ class VanguardRestoreCommand extends Command
 
             return self::SUCCESS;
         } catch (\Throwable $e) {
+            // The row first, then the event: an alert about a restore whose
+            // row still says 'running' sends the operator to a screen that
+            // contradicts it.
+            $restore->markFailed($e->getMessage());
+            event(new RestoreFailed($restore, $e));
+
             $this->error('✗ Restore failed: '.$e->getMessage());
 
             return self::FAILURE;
         }
+    }
+
+    /**
+     * Open the history row for this run.
+     *
+     * The target fields are copied off the backup rather than left to the
+     * relation, exactly as the endpoint does: the history has to survive the
+     * deletion of the archive it restored.
+     */
+    protected function openHistoryRow(BackupRecord $record, ?string $targetDatabase): RestoreRecord
+    {
+        return RestoreRecord::on(Vanguard::centralConnection())->create([
+            'backup_id' => $record->id,
+            'type' => $record->type,
+            'tenant_id' => $record->tenant_id,
+            'backup_created_at' => $record->created_at,
+            'source' => $this->option('source') ?: null,
+            'target_database' => $targetDatabase,
+            'restore_db' => ! $this->option('no-db'),
+            'restore_storage' => (bool) $this->option('restore-storage'),
+            'verify_checksum' => ! $this->option('no-verify'),
+            'status' => 'pending',
+            'requested_by' => $this->operator(),
+            'origin' => 'console',
+        ]);
+    }
+
+    /**
+     * Name whoever is running this command.
+     *
+     * There is no authenticated user on a console, so the application's own
+     * resolver gets asked first and the shell account plus the machine are the
+     * fallback. That is not an identity, but it is what an audit of "who
+     * restored production" has to start from, and it is strictly more than the
+     * null this column used to hold.
+     *
+     * Nothing is prefixed here: that this run came from a console is recorded
+     * in `origin`, and gluing it in front of the name would put two facts in
+     * the column that answers "who".
+     */
+    protected function operator(): string
+    {
+        if ($actor = Vanguard::actor()) {
+            return $actor;
+        }
+
+        $user = get_current_user() ?: (string) (getenv('USER') ?: 'unknown');
+
+        return $user.'@'.(gethostname() ?: 'unknown');
     }
 
     /**

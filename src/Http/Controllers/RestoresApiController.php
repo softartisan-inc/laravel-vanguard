@@ -80,6 +80,10 @@ class RestoresApiController extends Controller
             'target' => $r->tenant_id ?? $r->type,
             'backup_created_at' => $r->backup_created_at?->toIso8601String(),
             'source' => $r->source,
+            // Null for every restore that wrote to the target's own
+            // database. Set only by a console rehearsal, which must never
+            // read as "this tenant was restored".
+            'target_database' => $r->target_database,
             'restore_db' => $r->restore_db,
             'restore_storage' => $r->restore_storage,
             'verify_checksum' => $r->verify_checksum,
@@ -89,6 +93,10 @@ class RestoresApiController extends Controller
             // details" is what made a failed restore unfixable from here.
             'error' => $r->error,
             'requested_by' => $r->requested_by,
+            // Which path asked: 'api' or 'console'. Null on rows written
+            // before this column existed — a path nobody recorded, which is
+            // not the same fact as 'api'.
+            'origin' => $r->origin,
             'started_at' => $r->started_at?->toIso8601String(),
             'completed_at' => $r->completed_at?->toIso8601String(),
             'created_at' => $r->created_at->toIso8601String(),
