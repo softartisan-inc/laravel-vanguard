@@ -229,12 +229,17 @@ class OperationsApiController extends Controller
             'type' => $r->type,
             'tenant_id' => $r->tenant_id,
             'target' => $r->tenant_id ?? $r->type,
+            // Null unless a console rehearsal redirected this run into a
+            // throwaway database. Without it a rehearsal reads on screen as
+            // the target being overwritten.
+            'target_database' => $r->target_database,
             'status' => $r->status,
             // The one thing that moves while a restore holds the same status
             // for minutes: without it the screen looks like it has hung.
             'phase' => $r->phase,
             'error' => $r->error,
             'requested_by' => $r->requested_by,
+            'origin' => $r->origin,
             'created_at' => $r->created_at?->toIso8601String(),
             'started_at' => $r->started_at?->toIso8601String(),
             'completed_at' => $r->completed_at?->toIso8601String(),

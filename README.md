@@ -185,6 +185,25 @@ use SoftArtisan\Vanguard\Facades\Vanguard;
 Vanguard::auth(fn (Request $r) => $r->user()?->isAdmin());
 ```
 
+### Who is recorded as having asked for a restore
+
+Every restore writes its author into `vanguard_restores.requested_by`. By
+default that is `auth()->user()->getAuthIdentifier()` — the **default** guard.
+If your dashboard authenticates on another one, say so, or the column stays
+null for every restore run from the interface:
+
+```php
+Vanguard::restoreActor(fn (): ?string => Auth::guard('ops')->user()?->email);
+```
+
+A restore run from the console has no authenticated user: the row then names
+the shell account and the machine, `deploy@web-1`.
+
+Where the run came from is a separate column, `origin` — `api` or `console` —
+so `requested_by` holds an identity and nothing else. It is null on rows
+written before that column existed; a path nobody recorded is not the same
+fact as `api`.
+
 ---
 
 ## Multi-tenancy
@@ -233,6 +252,8 @@ php artisan vanguard:restore 42 --database=vanguard_rehearsal
 php artisan vanguard:restore 43 --database=vanguard_rehearsal
 ```
 
+The run is recorded as a rehearsal: `vanguard_restores.target_database` holds the database it wrote to, and both the **Restores** screen and **In Progress** tag the row `Rehearsal`. A rehearsal that read like a real restore would report data replaced that was never touched.
+
 Create the database first — Vanguard writes into it, it does not create it. The name must be a plain identifier (letters, digits, `_`, `.`, `-`); anything else is refused rather than quoted, because the value reaches a command line. Nothing is written back to your configuration: the application, its other connections and any later restore in the same process are untouched. The command says which database it is about to write to, on its own line, before it asks to proceed.
 
 > `--database=` is CLI-only, like `--wipe-storage`. The dashboard API refuses the parameter outright rather than ignoring it: a rehearsal you believe is going to a scratch database and silently goes to the real one is the worst thing this option could do.
@@ -257,6 +278,23 @@ php artisan vanguard:restore 42 --restore-storage
 php artisan vanguard:restore 42 --restore-storage --wipe-storage
 ```
 
+### The restore history
+
+Every restore leaves one row, whichever path it came from — the endpoint, or
+`vanguard:restore` on a console. The **Restores** screen in the dashboard reads
+it: status, target, who asked, the source the bundle was read from, and the
+exact error. Rows are never pruned; they weigh a few bytes and answer "who
+restored what, when" long after the archive itself is gone.
+
+```
+GET /vanguard/api/restores?status=failed&tenant_id=acme&per_page=20
+GET /vanguard/api/restores/{id}
+```
+
+A restore whose worker is killed halfway leaves its row at `running`;
+`vanguard:cleanup-tmp` closes it past `vanguard.queue.timeout` and sends the
+failure notification. See `StaleRunReaper`.
+
 > `--wipe-storage` is CLI-only on purpose. The dashboard API (`POST /api/backups/{id}/restore`) accepts `verify_checksum`, `restore_db`, `restore_storage` and `source` — and answers 400 for `wipe_storage` or `database`, on presence alone.
 
 ---
@@ -272,19 +310,27 @@ resources/
     ├── composables/
     │   ├── useApi.js           ← fetch wrapper (CSRF, base URL via inject)
     │   ├── useBackups.js       ← shared state: stats, backups, tenants
+    │   ├── useOperations.js    ← what is running, waiting and recently failed
+    │   ├── useRestores.js      ← shared state: the restore history
     │   ├── useRealtime.js      ← SSE / polling driver (auto-fallback)
+    │   ├── reconcile.js        ← merges a refresh into the rows already on screen
     │   └── useToast.js         ← global toast notifications
     ├── components/
     │   ├── BackupTable.vue     ← reusable table (with or without actions)
     │   ├── StatCards.vue
     │   ├── RunModal.vue
+    │   ├── RestoreModal.vue
+    │   ├── DeleteModal.vue
+    │   ├── BulkDeleteModal.vue
     │   ├── VBadge.vue          ← status badge (completed/running/failed/pending)
     │   ├── VPagination.vue
     │   ├── VToast.vue
     │   └── RealtimeIndicator.vue  ← Live / Polling / Offline dot in sidebar
     └── pages/
         ├── Dashboard.vue
+        ├── Operations.vue      ← In Progress: running, waiting, failed in the last day
         ├── Backups.vue         ← full list with status/type filters + pagination
+        ├── Restores.vue        ← the restore history, status/tenant filters + pagination
         └── Tenants.vue
 ```
 

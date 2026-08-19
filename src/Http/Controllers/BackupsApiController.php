@@ -592,6 +592,7 @@ class BackupsApiController extends Controller
             'verify_checksum' => $request->boolean('verify_checksum', true),
             'status' => 'pending',
             'requested_by' => Vanguard::actor(),
+            'origin' => 'api',
         ]);
 
         $this->trace('restore requested', $target, [

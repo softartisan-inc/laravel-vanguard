@@ -25,6 +25,7 @@ class RestoreRecord extends Model
         'tenant_id',
         'backup_created_at',
         'source',
+        'target_database',
         'restore_db',
         'restore_storage',
         'verify_checksum',
@@ -32,6 +33,7 @@ class RestoreRecord extends Model
         'phase',
         'error',
         'requested_by',
+        'origin',
         'started_at',
         'completed_at',
     ];
