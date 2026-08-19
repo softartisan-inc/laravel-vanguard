@@ -7,7 +7,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
-## [Unreleased]
+## [2.6.0] — 2026-08-19
 
 ### A restore that succeeded now leaves a trace
 
@@ -70,6 +70,14 @@ from the interface:
 ```php
 Vanguard::restoreActor(fn (): ?string => Auth::guard('ops')->user()?->email);
 ```
+
+**What this does not do.** It does not name whoever was at the keyboard for a
+restore run over SSH. The shell account is shared on most servers, so every
+console restore is attributed identically; `origin` says the run came from a
+console, and that is as far as the machine can honestly go. It also writes
+nothing into the rows that already exist — `requested_by` and `origin` stay null
+for every restore performed before this release, because a path nobody recorded
+is not a path that can be reconstructed.
 
 ---
 
