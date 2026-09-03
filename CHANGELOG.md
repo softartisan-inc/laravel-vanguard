@@ -7,6 +7,52 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
+## [2.6.1] — 2026-09-02
+
+### A backup no longer dies because Horizon rebalanced
+
+Operators were getting this, several times a week, never on the same tenant:
+
+```
+Error: [Vanguard:mysqldump] Command failed (exit 5):
+
+No archive was produced for this run.
+```
+
+Nothing after the colon, because mysqldump had nothing to say. The dump was
+fine. We killed it.
+
+The loop that reads a dump's two pipes waits on `stream_select()`, and
+`select(2)` is never restarted after a signal on Linux, whatever `SA_RESTART`
+says: PHP returns `false` with *Interrupted system call*. The loop treated that
+as the end of the stream, left, and closed the pipes under a `mysqldump` that
+was still writing. Built on libmysqlclient, which sets `SIGPIPE` to ignore, it
+did not die — its writes simply failed, and its last `fflush()` returned
+`EX_EOF`, exit 5, printed on no stream at all. Vanguard then reported that exit
+code as the cause of a failure it had caused itself, and discarded the archive.
+
+Every backup runs in a queue worker, and a queue worker is signalled all day
+long: Horizon pauses a pool with `SIGUSR2`, resumes it with `SIGCONT`, scales
+one down with `SIGTERM`, and the worker arms a `SIGALRM` for the job timeout.
+All four handlers do nothing but set a flag. So the failure was a lottery whose
+odds rose with the size of the database: the longest dump lost most often.
+
+- **An interrupted wait is waited again.** The pipes are intact and the child is
+  still writing; that is the only correct answer, and the dump now runs to the
+  end through any number of signals.
+- **A wait that fails for a real reason says so** — `[Vanguard:…] Lost the pipes
+  to the dump: …` — instead of leaving the loop quietly and letting the dump's
+  exit code take the blame. The child is terminated rather than waited on, since
+  nobody is reading it any more.
+- **The reason is captured at the call site.** `@` would have hidden it from us
+  too, and `error_get_last()` is empty under Laravel, whose error handler takes
+  the warning before PHP records it. Without this the two cases are
+  indistinguishable.
+
+No configuration changes. Nothing to run.
+
+---
+
 ## [2.6.0] — 2026-08-19
 
 ### A restore that succeeded now leaves a trace

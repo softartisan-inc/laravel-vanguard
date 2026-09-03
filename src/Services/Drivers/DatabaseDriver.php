@@ -24,6 +24,9 @@ class DatabaseDriver
     /** Maximum length of the failing statement quoted in a PDO restore error. */
     protected const PDO_ERROR_STATEMENT_CHARS = 800;
 
+    /** errno for a system call interrupted by a signal — see selectInterruptedBySignal(). */
+    protected const ERRNO_EINTR = 4;
+
     /**
      * The client each driver's dump and restore actually shells out to, and
      * what happens when it is missing.
@@ -339,13 +342,35 @@ class DatabaseDriver
         $stderr = '';
         $open = [1 => $pipes[1], 2 => $pipes[2]];
 
+        $selectError = null;
+
         while ($open !== []) {
             $read = array_values($open);
-            $write = null;
-            $except = null;
 
-            if (@stream_select($read, $write, $except, 1) === false) {
-                break;
+            if ($this->selectReadable($read, $selectError) === false) {
+                // A signal arrived. Backups run in a queue worker, and a queue
+                // worker is signalled all day long — Horizon pauses a pool with
+                // SIGUSR2, resumes it with SIGCONT, scales one down with
+                // SIGTERM, and the worker arms a SIGALRM for the job timeout.
+                // select(2) is never restarted after a signal on Linux, whatever
+                // SA_RESTART says, so this is expected and means nothing about
+                // the dump: the pipes are intact, the child is still writing,
+                // and the only correct answer is to wait again.
+                if ($this->selectInterruptedBySignal($selectError)) {
+                    continue;
+                }
+
+                // Anything else really is broken. Say so here instead of
+                // leaving the loop: closing the pipes under a dump that is
+                // still writing makes it fail, and its exit code then gets
+                // reported as the cause of a failure we caused ourselves.
+                $this->abandonProcess($process, $open, $writer);
+
+                $reason = $selectError ?? 'unknown error';
+
+                throw new RuntimeException(
+                    "[Vanguard:{$label}] Lost the pipes to the dump: {$reason}"
+                );
             }
 
             foreach ($read as $stream) {
@@ -395,6 +420,81 @@ class DatabaseDriver
                 "[Vanguard:{$label}] Command failed (exit {$exitCode}):\n".trim($stderr)
             );
         }
+    }
+
+    /**
+     * Wait for either pipe to have something to say, keeping the reason when
+     * the wait itself fails.
+     *
+     * The reason only ever exists as a PHP warning, and the warning has to be
+     * caught here: @ would hide it from us too, and error_get_last() is empty
+     * under Laravel, whose error handler takes the warning before PHP records
+     * it. This is what makes the difference between a signal and a broken pipe
+     * set observable at all.
+     *
+     * @param  array<int, resource>  $read  Streams to watch; narrowed to the readable ones
+     * @param  string|null  $error  Set to the failure's message, null on success
+     * @return int|false Number of readable streams, false when the wait failed
+     */
+    protected function selectReadable(array &$read, ?string &$error): int|false
+    {
+        $write = null;
+        $except = null;
+        $error = null;
+
+        set_error_handler(static function (int $severity, string $message) use (&$error): bool {
+            $error = $message;
+
+            return true;
+        });
+
+        try {
+            return stream_select($read, $write, $except, 1);
+        } finally {
+            restore_error_handler();
+        }
+    }
+
+    /**
+     * Whether the wait that just failed was merely interrupted by a signal,
+     * rather than handed a broken set of streams.
+     *
+     * PHP words it "Unable to select [4]: Interrupted system call". The
+     * bracketed number is errno and EINTR is 4; the text after it comes from
+     * strerror() and therefore from the locale, so the number is what this
+     * reads and the text is only a fallback.
+     */
+    protected function selectInterruptedBySignal(?string $message): bool
+    {
+        $message ??= '';
+
+        if (preg_match('/Unable to select \[(\d+)\]/', $message, $matches) === 1) {
+            return (int) $matches[1] === self::ERRNO_EINTR;
+        }
+
+        return str_contains($message, 'Interrupted system call');
+    }
+
+    /**
+     * Give up on a running dump without waiting for it.
+     *
+     * proc_close() waits for the child, and a child whose output nobody reads
+     * any more can wait forever — so the pipes go first and the process is
+     * asked to stop before we sit down to reap it.
+     *
+     * @param  resource  $process
+     * @param  array<int, resource>  $open  Pipes still open
+     */
+    protected function abandonProcess($process, array $open, GzipDumpWriter $writer): void
+    {
+        foreach ($open as $stream) {
+            fclose($stream);
+        }
+
+        $writer->discard();
+
+        proc_terminate($process);
+        proc_close($process);
     }
 
     /**
