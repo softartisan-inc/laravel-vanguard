@@ -193,6 +193,12 @@ class HealthController extends Controller
      */
     protected function probe(string $disk, string $path): array
     {
+        // The R2 disk without its S3 adapter: name the package instead of
+        // relaying Laravel's "class not found".
+        if (($problem = Vanguard::r2DiskProblem($disk)) !== null) {
+            return [false, $problem];
+        }
+
         $key = rtrim($path, '/').'/.vanguard-probe-'.bin2hex(random_bytes(8));
         $payload = 'vanguard-probe';
 

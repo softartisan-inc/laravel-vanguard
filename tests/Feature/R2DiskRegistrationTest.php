@@ -3,6 +3,7 @@
 namespace SoftArtisan\Vanguard\Tests\Feature;
 
 use InvalidArgumentException;
+use League\Flysystem\AwsS3V3\AwsS3V3Adapter;
 use PHPUnit\Framework\Attributes\Test;
 use SoftArtisan\Vanguard\Tests\TestCase;
 use SoftArtisan\Vanguard\Vanguard;
@@ -211,5 +212,56 @@ class R2DiskRegistrationTest extends TestCase
 
         $this->assertNull(Vanguard::registerR2Disk());
         $this->assertSame($before, config('filesystems.disks.s3'));
+    }
+
+    #[Test]
+    public function the_health_screen_names_the_missing_s3_adapter_for_the_r2_disk(): void
+    {
+        if (class_exists(AwsS3V3Adapter::class)) {
+            $this->markTestSkipped('league/flysystem-aws-s3-v3 is installed here.');
+        }
+
+        Vanguard::auth(fn ($request) => true);
+        $this->r2();
+        Vanguard::registerR2Disk();
+        config([
+            'vanguard.destinations.remote.enabled' => true,
+            'vanguard.destinations.remote.disk' => 'vanguard-r2',
+        ]);
+
+        $remote = collect($this->getJson('/vanguard/api/health')->assertOk()->json('destinations'))
+            ->firstWhere('name', 'remote');
+
+        $this->assertFalse($remote['writable']);
+        $this->assertStringContainsString('composer require league/flysystem-aws-s3-v3', $remote['reason']);
+    }
+
+    #[Test]
+    public function install_names_the_missing_s3_adapter_for_the_r2_disk(): void
+    {
+        if (class_exists(AwsS3V3Adapter::class)) {
+            $this->markTestSkipped('league/flysystem-aws-s3-v3 is installed here.');
+        }
+
+        $this->r2();
+        Vanguard::registerR2Disk();
+        config([
+            'vanguard.destinations.remote.enabled' => true,
+            'vanguard.destinations.remote.disk' => 'vanguard-r2',
+        ]);
+
+        $this->artisan('vanguard:install --no-interaction')
+            ->doesntExpectOutputToContain('is not declared in config/filesystems.php')
+            ->expectsOutputToContain('composer require league/flysystem-aws-s3-v3')
+            ->assertSuccessful();
+    }
+
+    #[Test]
+    public function install_explains_how_to_use_r2(): void
+    {
+        $this->artisan('vanguard:install --no-interaction')
+            ->expectsOutputToContain('Cloudflare R2')
+            ->expectsOutputToContain('VANGUARD_R2_BUCKET')
+            ->assertSuccessful();
     }
 }

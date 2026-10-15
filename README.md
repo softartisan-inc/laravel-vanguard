@@ -477,6 +477,80 @@ encrypted before it is uploaded.
 
 ---
 
+## Cloudflare R2
+
+Off by default. R2 speaks the S3 API, so it is used through the existing
+**remote** destination; Vanguard only declares the disk for you. Nothing
+changes for an `s3` disk you already use.
+
+1. In the Cloudflare dashboard, create a bucket (R2 → *Create bucket*). For
+   data that must stay in the EU, choose the **EU jurisdiction** at creation.
+2. Create an R2 API token (*Manage R2 API Tokens*) with the **Object Read &
+   Write** permission, **restricted to that bucket**. Keep the access key id
+   and secret; the account id is shown on the R2 overview page.
+3. Install the S3 adapter and set the runtime variables:
+
+```bash
+composer require league/flysystem-aws-s3-v3
+```
+
+```dotenv
+VANGUARD_R2_ACCOUNT_ID=0123456789abcdef0123456789abcdef
+VANGUARD_R2_ACCESS_KEY_ID=...
+VANGUARD_R2_SECRET_ACCESS_KEY=...
+VANGUARD_R2_BUCKET=app-backups
+# VANGUARD_R2_JURISDICTION=eu        # only for a bucket created in the EU jurisdiction
+# VANGUARD_R2_DISK=vanguard-r2       # disk name (default)
+# VANGUARD_R2_ENDPOINT=              # explicit endpoint, overrides the one built from the account
+
+VANGUARD_REMOTE_ENABLED=true
+VANGUARD_REMOTE_DISK=vanguard-r2
+VANGUARD_REMOTE_PATH=vanguard-backups
+```
+
+With a bucket and an account id (or an endpoint), Vanguard declares this
+disk at registration — the equivalent of:
+
+```php
+'vanguard-r2' => [
+    'driver' => 's3',
+    'key' => env('VANGUARD_R2_ACCESS_KEY_ID'),
+    'secret' => env('VANGUARD_R2_SECRET_ACCESS_KEY'),
+    'region' => 'auto',
+    'bucket' => env('VANGUARD_R2_BUCKET'),
+    'endpoint' => 'https://<account_id>.r2.cloudflarestorage.com', // .eu. with the EU jurisdiction
+    'use_path_style_endpoint' => true,
+    'throw' => true,
+    'request_checksum_calculation' => 'when_required',
+    'response_checksum_validation' => 'when_required',
+],
+```
+
+- **Never overwrites**: a disk already declared under that name in
+  `config/filesystems.php` wins, and no other disk (`s3` included) is touched.
+  To declare it yourself under another name, build it from a service
+  provider with `Vanguard::r2DiskConfig()`.
+- No ACL and no visibility are set: R2 does not implement object ACLs.
+- The two checksum keys stop recent AWS SDKs (3.337+) from adding CRC
+  checksum headers to every request, which S3-compatible services do not all
+  accept; older SDKs ignore them.
+- An unknown `VANGUARD_R2_JURISDICTION` is logged and the disk is not
+  declared — guessing would send archives to another jurisdiction.
+- The health screen's write/read/delete probe covers R2 like any disk, and
+  names the missing `league/flysystem-aws-s3-v3` package when it is absent;
+  `vanguard:install` does too.
+- Retention: Vanguard prunes its own archives (`VANGUARD_RETENTION_DAYS`). An
+  R2 **object lifecycle rule** on the bucket (e.g. delete after 90 days) is a
+  useful second guard, and a **bucket lock** rule protects archives from
+  deletion by a compromised server. Keep the lifecycle longer than Vanguard's
+  retention so the two do not race.
+- R2 charges no egress fees: downloading an archive to restore it costs
+  nothing beyond the operation itself.
+- Combine with [encrypted archives](#encrypted-archives-age) so the bucket
+  only ever holds ciphertext.
+
+---
+
 ## Restoring a backup
 
 ```bash

@@ -5,6 +5,7 @@ namespace SoftArtisan\Vanguard;
 use Closure;
 use Illuminate\Http\Request;
 use InvalidArgumentException;
+use League\Flysystem\AwsS3V3\AwsS3V3Adapter;
 
 class Vanguard
 {
@@ -210,6 +211,31 @@ class Vanguard
         $host = trim($account).($jurisdiction === '' ? '' : ".{$jurisdiction}");
 
         return "https://{$host}.r2.cloudflarestorage.com";
+    }
+
+    /**
+     * Why the R2 disk cannot work on this host, or null.
+     *
+     * Only for the disk Vanguard declares for R2 (vanguard.r2): the S3
+     * Flysystem adapter is a suggested dependency, and without it Laravel
+     * fails with a bare "class not found". Other disks keep their own errors.
+     */
+    public static function r2DiskProblem(string $disk): ?string
+    {
+        if (! static::r2Configured() || $disk !== static::r2DiskName()) {
+            return null;
+        }
+
+        if (config("filesystems.disks.{$disk}.driver") !== 's3') {
+            return null;
+        }
+
+        if (class_exists(AwsS3V3Adapter::class)) {
+            return null;
+        }
+
+        return "Disk [{$disk}] is Cloudflare R2, reached through the S3 API, and the S3 adapter is not installed: "
+            .'run composer require league/flysystem-aws-s3-v3.';
     }
 
     /**
