@@ -35,10 +35,56 @@ return [
     | discover tenants and allow per-tenant backup operations.
     |
     | 'tenant_model' must implement Stancl\Tenancy\Contracts\Tenant
+    |
+    | 'database_mode' (runtime) — how tenants map to databases:
+    |   'multi'  (default) one database per tenant: every tenant backup dumps
+    |            the tenant's own database (and its files when asked).
+    |   'single' one database shared by every tenant, e.g. isolated by
+    |            PostgreSQL Row-Level Security. The shared database is dumped
+    |            once, by the landlord backup (see 'database' below for a
+    |            dedicated connection), and a tenant backup holds the tenant's
+    |            files only — storage_path() as stancl/tenancy's
+    |            FilesystemTenancyBootstrapper sets it for that tenant. No
+    |            tenant database connection is ever read. Restoring a tenant
+    |            backup restores its files; restoring one tenant's rows out of
+    |            the shared database is not covered.
+    | Any other value is reported at boot and refused by tenant backups.
     */
     'tenancy' => [
         'enabled' => env('VANGUARD_TENANCY_ENABLED', true),
         'tenant_model' => env('VANGUARD_TENANT_MODEL', Tenant::class),
+        'database_mode' => env('VANGUARD_TENANCY_DATABASE_MODE', 'multi'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Dedicated Backup / Restore Connections
+    |--------------------------------------------------------------------------
+    | Names of connections declared in config/database.php. Both are read at
+    | runtime. Leave them null to keep the default behaviour: the landlord dump
+    | runs through the central connection (tenancy.database.central_connection,
+    | else database.default) and the landlord restore writes through
+    | database.default.
+    |
+    | Set them when the application's own database role cannot see — or
+    | write — every row. On PostgreSQL with Row-Level Security, a dump taken
+    | as the application role holds only what that role is allowed to see:
+    |
+    |   'backup_connection'  — a role with BYPASSRLS, ideally read-only
+    |                          (ALTER ROLE ... SET default_transaction_read_only = on).
+    |   'restore_connection' — the owner of the tables, with BYPASSRLS: under
+    |                          FORCE ROW LEVEL SECURITY the owner is filtered too.
+    |
+    | A named connection that is not declared, or whose driver differs from
+    | the connection it replaces, fails the backup/restore loudly — there is
+    | no silent fallback to the application connection.
+    |
+    | Only the landlord (global) dump and restore move. In a multi-database
+    | tenancy setup, per-tenant dumps keep using the tenant connection.
+    */
+    'database' => [
+        'backup_connection' => env('VANGUARD_BACKUP_CONNECTION', null),
+        'restore_connection' => env('VANGUARD_RESTORE_CONNECTION', null),
     ],
 
     /*
@@ -264,12 +310,31 @@ return [
     | would fail outright. Add it here if your account has that privilege.
     |
     | Accepts a space-separated string or an array of options.
+    |
+    | 'pgsql_version_check' (opt-in, read at runtime) — pg_dump cannot dump a
+    | server of a newer major version (a pg_dump 16 against a PostgreSQL 18
+    | server fails), and it only says so once the dump has started. With
+    | this check, the major version of the resolved pg_dump binary is
+    | compared with the server's (SHOW server_version_num, on the connection
+    | the dump uses) before anything is dumped:
+    |
+    |   'off'    (default) no check: no extra process, no extra connection —
+    |            the behaviour of every version before this setting existed.
+    |   'warn'   a mismatch is logged and the dump runs anyway.
+    |   'strict' a mismatch refuses the backup before the dump starts, with a
+    |            message naming both versions and VANGUARD_PG_DUMP_BINARY.
+    |
+    | A version that cannot be read (binary missing, server unreachable) is
+    | logged and never blocks: unknown is not a proven mismatch. Point
+    | 'binaries.pg_dump' below at the right client, e.g.
+    | /usr/lib/postgresql/18/bin/pg_dump on Debian/Ubuntu.
     */
     'dump' => [
         'mysql_options' => env(
             'VANGUARD_MYSQL_DUMP_OPTIONS',
             '--single-transaction --quick --routines --triggers --no-tablespaces',
         ),
+        'pgsql_version_check' => env('VANGUARD_PG_VERSION_CHECK', 'off'),
     ],
 
     /*
@@ -282,18 +347,101 @@ return [
     |
     | Set explicitly when the binary is not in the PATH of your web/queue
     | process (common in Docker, shared hosting, or custom server setups).
+    | A configured path is always used as is, even when nothing is there
+    | (the health screen then reports it missing). Auto-detection does not
+    | look into /usr/lib/postgresql/<major>/bin: when several PostgreSQL
+    | clients are installed, pin the one matching your server here.
     |
     | Examples:
     |   VANGUARD_MYSQLDUMP_BINARY=/usr/bin/mysqldump
     |   VANGUARD_MYSQL_BINARY=/usr/bin/mysql
-    |   VANGUARD_PG_DUMP_BINARY=/usr/bin/pg_dump
-    |   VANGUARD_PSQL_BINARY=/usr/bin/psql
+    |   VANGUARD_PG_DUMP_BINARY=/usr/lib/postgresql/18/bin/pg_dump
+    |   VANGUARD_PSQL_BINARY=/usr/lib/postgresql/18/bin/psql
+    |   VANGUARD_AGE_BINARY=/usr/bin/age
     */
     'binaries' => [
         'mysqldump' => env('VANGUARD_MYSQLDUMP_BINARY', null),
         'mysql' => env('VANGUARD_MYSQL_BINARY', null),
         'pg_dump' => env('VANGUARD_PG_DUMP_BINARY', null),
         'psql' => env('VANGUARD_PSQL_BINARY', null),
+        // Only used when 'encryption' below is enabled.
+        'age' => env('VANGUARD_AGE_BINARY', null),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Archive Encryption (opt-in)
+    |--------------------------------------------------------------------------
+    | Every key is read at runtime. Disabled by default: archives are plain
+    | .tar bundles, exactly as before this section existed.
+    |
+    | Enabled, each archive is encrypted with age (https://age-encryption.org)
+    | to one or more PUBLIC keys before it leaves the machine, and stored as
+    | {name}.tar.age on every destination. The private key is never part of
+    | this configuration: generate it off the server (age-keygen on an admin
+    | workstation), keep it there, and put only the public key here. It is
+    | handed to `php artisan vanguard:restore {id} --identity=<file>` (or
+    | --identity-stdin) at restore time and never stored by Vanguard.
+    |
+    | 'enabled'         — true to encrypt every new archive.
+    | 'driver'          — 'age', the only supported value.
+    | 'recipients'      — age public keys (age1...) or SSH public keys
+    |                     (ssh-ed25519 ..., ssh-rsa ...), separated by commas
+    |                     or new lines; an array is accepted too. Several
+    |                     recipients = several keys able to decrypt (key
+    |                     rotation, a second custodian).
+    | 'recipients_file' — path to a file of recipients, one per line (age -R).
+    |
+    | When enabled, a backup with no usable recipient, or without the age
+    | binary (see 'binaries.age'), fails before anything is dumped. It never
+    | falls back to a plaintext archive. Encrypted backups cannot be restored
+    | from the dashboard or the HTTP API: a private key must not travel over
+    | HTTP or through the queue.
+    */
+    'encryption' => [
+        'enabled' => env('VANGUARD_ENCRYPTION_ENABLED', false),
+        'driver' => 'age',
+        'recipients' => env('VANGUARD_ENCRYPTION_RECIPIENTS', ''),
+        'recipients_file' => env('VANGUARD_ENCRYPTION_RECIPIENTS_FILE', null),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Cloudflare R2 (opt-in)
+    |--------------------------------------------------------------------------
+    | Every key is read at runtime. R2 is S3-compatible, so it is used through
+    | the existing 'remote' destination; this section only declares the disk.
+    |
+    | When 'bucket' and either 'account_id' or 'endpoint' are set, Vanguard
+    | declares an S3 disk named 'disk' (default 'vanguard-r2'): region auto,
+    | path-style endpoint https://<account_id>.r2.cloudflarestorage.com, no
+    | ACL/visibility, checksums only when required. A disk of that name already
+    | declared in config/filesystems.php is never overwritten, and no other
+    | disk (the 's3' one included) is ever touched. Left empty — the default —
+    | nothing is declared.
+    |
+    | Requires league/flysystem-aws-s3-v3. Then point the remote destination at it:
+    |   VANGUARD_REMOTE_ENABLED=true
+    |   VANGUARD_REMOTE_DISK=vanguard-r2
+    |
+    | 'jurisdiction' — null (default), 'eu' or 'fedramp': the bucket's data
+    |                  location jurisdiction, which has its own endpoint
+    |                  (https://<account_id>.eu.r2.cloudflarestorage.com).
+    | 'endpoint'     — explicit endpoint, overriding the one built from the
+    |                  account id (e.g. a local S3-compatible server in tests).
+    |
+    | Prefer declaring the disk yourself? Declare it in config/filesystems.php
+    | under the same name (it then wins), or build it from these settings in a
+    | service provider with SoftArtisan\Vanguard\Vanguard::r2DiskConfig().
+    */
+    'r2' => [
+        'disk' => env('VANGUARD_R2_DISK', 'vanguard-r2'),
+        'account_id' => env('VANGUARD_R2_ACCOUNT_ID'),
+        'access_key_id' => env('VANGUARD_R2_ACCESS_KEY_ID'),
+        'secret_access_key' => env('VANGUARD_R2_SECRET_ACCESS_KEY'),
+        'bucket' => env('VANGUARD_R2_BUCKET'),
+        'jurisdiction' => env('VANGUARD_R2_JURISDICTION', null),
+        'endpoint' => env('VANGUARD_R2_ENDPOINT', null),
     ],
 
 ];

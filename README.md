@@ -11,8 +11,16 @@ A multi-tenant backup dashboard for Laravel, built with Vue 3 + Vite and real-ti
 | PHP | `^8.3` (CI runs 8.3, 8.4, 8.5) |
 | Laravel | `^12.0` only |
 | System binaries | `tar`, `gzip` (GNU tar); `mysqldump`/`mysql` or `pg_dump`/`psql` for database backups |
+| Optional | `age` for [encrypted archives](#encrypted-archives-age); `league/flysystem-aws-s3-v3` for an S3 or [Cloudflare R2](#cloudflare-r2) remote |
 
 PHP 8.1/8.2 and Laravel 10/11 were dropped in 2.0 — see [Upgrading from 1.x to 2.0](#upgrading-from-1x-to-20).
+
+Since 2.7, a few modes are available on demand — all **off by default**, so an
+existing installation behaves exactly as before until it sets them:
+[single database under Row-Level Security](#single-database-under-row-level-security),
+[dedicated backup/restore connections](#dedicated-backuprestore-connections-postgresql-rls),
+[`pg_dump` version check](#postgresql-matching-pg_dump-to-the-server),
+[encrypted archives](#encrypted-archives-age) and [Cloudflare R2](#cloudflare-r2).
 
 Without the `mysqldump` binary, MySQL dumps fall back to a pure-PDO implementation (slower, but no binary needed). Binary locations can be pinned in `vanguard.binaries` when they are not in the PATH of your web/queue process.
 
@@ -178,12 +186,40 @@ turns a working backup into a failed one.
 
 ## Authentication
 
+Authorization stays in the application: Vanguard ships no roles and no
+policy of its own. **The default only checks that someone is logged in**
+(`$request->user() !== null`) — on an application where every customer has
+an account, every customer would reach the dashboard, its downloads and its
+restore button. Always set the callback:
+
 ```php
 // AppServiceProvider::boot()
 use SoftArtisan\Vanguard\Facades\Vanguard;
 
 Vanguard::auth(fn (Request $r) => $r->user()?->isAdmin());
 ```
+
+With a gate, so the rule lives beside the application's other abilities:
+
+```php
+// AppServiceProvider::boot()
+use Illuminate\Support\Facades\Gate;
+use SoftArtisan\Vanguard\Facades\Vanguard;
+
+Gate::define('viewVanguard', fn ($user) => $user->hasRole('platform-admin'));
+
+Vanguard::auth(fn (Request $r) => $r->user() !== null && Gate::forUser($r->user())->allows('viewVanguard'));
+```
+
+- The callback guards every Vanguard route — the dashboard, the JSON API
+  (run, restore, delete, download), the health screen and the SSE stream —
+  except the two static assets (`vanguard.js`, `vanguard.css`).
+- It runs after the `vanguard.middleware` stack (`['web']` by default). If the
+  dashboard authenticates on another guard, add its middleware there
+  (e.g. `['web', 'auth:ops']`) and read `$r->user('ops')` in the callback.
+- In a multi-tenant application, serve the dashboard from the central domain
+  only (`VANGUARD_DOMAIN`) and grant it to platform operators, never to a
+  tenant's own administrators: it lists and restores every tenant's backups.
 
 ### Who is recorded as having asked for a restore
 
@@ -216,6 +252,345 @@ fact as `api`.
 ],
 ```
 
+### Single database under Row-Level Security
+
+By default Vanguard expects **one database per tenant** (stancl/tenancy's
+`DatabaseTenancyBootstrapper`): a tenant backup dumps the tenant's own
+database. A multi-tenant application can instead keep **one database for
+every tenant**, rows isolated by PostgreSQL Row-Level Security, with only the
+storage split per tenant (`FilesystemTenancyBootstrapper`). There is then no
+tenant connection to dump, and every tenant backup used to fail on it.
+
+Opt in with a runtime variable:
+
+```dotenv
+VANGUARD_TENANCY_DATABASE_MODE=single   # default: multi
+```
+
+| | `multi` (default) | `single` |
+|---|---|---|
+| Landlord backup | central DB + files | **the shared DB** + files |
+| Tenant backup | tenant DB (+ files when asked) | **tenant files only** (`storage_path()` of the tenant) |
+| Tenant connection read | yes | never |
+| `--no-filesystem` on a tenant | DB only | **refused**: nothing to back up |
+| Tenant restore | tenant DB (+ files) | **files only**; `--restore-storage` (API: `restore_storage=true`) required, `--database` refused |
+
+- Schedule both: `schedule.landlord` (the shared database) and
+  `schedule.tenants` (each tenant's files). Both are on by default.
+- Tenant records carry `sources = ["filesystem"]` and
+  `meta.database_mode = "single"`; the dashboard labels tenant backups
+  *files only*.
+- A tenant restore without the files is refused everywhere — console,
+  API (400) and queued job — before anything is downloaded: it would restore
+  nothing. The dashboard's restore dialog asks for the files in this mode.
+- A database restore asked for on a tenant backup is announced
+  (`skipping database`) and logged, never silently skipped.
+- **Limit:** restoring the rows of a single tenant out of the shared database
+  is not covered — the shared database comes back as a whole, from a landlord
+  backup.
+- Any other value than `multi` / `single` is logged at boot and refused by
+  tenant backups and restores.
+
+Pair it with a dedicated backup connection (below): on a database under
+Row-Level Security, the application role cannot dump it.
+
+### Dedicated backup/restore connections (PostgreSQL RLS)
+
+Under Row-Level Security the application's role only sees the rows of the
+current tenant. A `pg_dump` taken as that role is a dump of **what it can
+see**, and under `FORCE ROW LEVEL SECURITY` even the table owner is filtered
+on restore. Name connections of their own for the dump and for the restore
+(runtime variables, connection names from `config/database.php`):
+
+```dotenv
+VANGUARD_BACKUP_CONNECTION=pgsql_backup     # default: unset
+VANGUARD_RESTORE_CONNECTION=pgsql_restore   # default: unset
+```
+
+```php
+// config/database.php — same server and database as 'pgsql', other roles
+'pgsql_backup' => [
+    'driver' => 'pgsql',
+    'host' => env('DB_HOST', '127.0.0.1'),
+    'port' => env('DB_PORT', '5432'),
+    'database' => env('DB_DATABASE'),
+    'username' => env('DB_BACKUP_USERNAME'),
+    'password' => env('DB_BACKUP_PASSWORD'),
+    'charset' => 'utf8',
+    'search_path' => 'public',
+    'sslmode' => env('DB_SSLMODE', 'prefer'),
+],
+'pgsql_restore' => [
+    // same keys, with DB_RESTORE_USERNAME / DB_RESTORE_PASSWORD
+],
+```
+
+The roles, on the PostgreSQL side:
+
+```sql
+-- Dump: sees every row, cannot write anything.
+-- FOR ROLE names the role that creates the tables (the one migrations run
+-- as): without it the default privileges only cover objects created by
+-- whoever runs this statement, and the next migration's tables are unreadable.
+CREATE ROLE app_backup LOGIN PASSWORD '...' BYPASSRLS;
+ALTER ROLE app_backup SET default_transaction_read_only = on;
+GRANT CONNECT ON DATABASE app TO app_backup;
+GRANT USAGE ON SCHEMA public TO app_backup;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO app_backup;
+GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO app_backup;
+ALTER DEFAULT PRIVILEGES FOR ROLE app_owner IN SCHEMA public GRANT SELECT ON TABLES TO app_backup;
+ALTER DEFAULT PRIVILEGES FOR ROLE app_owner IN SCHEMA public GRANT SELECT ON SEQUENCES TO app_backup;
+
+-- Restore: owns the tables, so it can recreate them, and bypasses RLS
+ALTER ROLE app_owner BYPASSRLS;
+```
+
+- **Unset, nothing changes**: the dump uses the central connection
+  (`tenancy.database.central_connection`, else `database.default`) and the
+  landlord restore writes through `database.default`, exactly as before.
+- A connection that is not declared, or whose driver differs from the one it
+  replaces, **fails the backup or restore** before anything is dumped or
+  written — there is no silent fallback to the application role, which is the
+  very failure being avoided.
+- `--database=` (restore rehearsal) still applies, on top of the restore
+  connection: only the database name moves.
+- Only the landlord/global dump and restore use them. In `multi` mode,
+  per-tenant dumps keep using the tenant connection.
+- The health screen checks the database clients of these connections and
+  names them under `connections` (names only, never credentials).
+- Vanguard's own tables (`vanguard_backups`, `vanguard_restores`) keep being
+  read and written through the application connection.
+
+### PostgreSQL: matching `pg_dump` to the server
+
+`pg_dump` cannot dump a server of a **newer major version**: a `pg_dump 16`
+against a PostgreSQL 18 server fails with `server version mismatch`, and only
+once the backup has started. Two settings, both read at runtime:
+
+```dotenv
+# Which client binaries to run. A configured path is used as is (never
+# replaced by auto-detection); unset, /usr/bin, /usr/local/bin, … are searched.
+VANGUARD_PG_DUMP_BINARY=/usr/lib/postgresql/18/bin/pg_dump
+VANGUARD_PSQL_BINARY=/usr/lib/postgresql/18/bin/psql
+
+# Compare the pg_dump and server majors before every dump (default: off)
+VANGUARD_PG_VERSION_CHECK=strict   # off | warn | strict
+```
+
+| `VANGUARD_PG_VERSION_CHECK` | Before each PostgreSQL dump |
+|---|---|
+| `off` *(default)* | nothing: no `pg_dump --version`, no extra connection — the behaviour of every earlier version |
+| `warn` | an older `pg_dump` is logged; the dump runs anyway |
+| `strict` | an older `pg_dump` **refuses the backup before the dump starts**, naming both versions, the binary and `VANGUARD_PG_DUMP_BINARY` (and `/usr/lib/postgresql/<server>/bin/pg_dump` when it is installed) |
+
+- The server version (`SHOW server_version_num`) is read over the connection
+  the dump uses — the dedicated backup connection when one is configured.
+- A `pg_dump` of the same major or newer passes. A version that cannot be
+  read (binary missing, server unreachable) is logged and **never blocks**:
+  unknown is not a proven mismatch, and the dump reports its own error.
+- An unknown value is logged and treated as `warn`.
+- With the check on, the health screen adds `version`, `server_version`,
+  `version_check` and `version_compatible` to the `pgsql` row of
+  `database_clients`; a mismatch is `ok: false` in `strict`, `degraded` in
+  `warn`. With the check off, the row is unchanged.
+- Auto-detection never looks into `/usr/lib/postgresql/<major>/bin`: with
+  several clients installed (common on Debian/Ubuntu, which put only the
+  newest one on the `PATH` through wrappers), pin the binary.
+
+Getting the right client into the image:
+
+```dockerfile
+# Debian/Ubuntu base: the PGDG repository ships every major
+RUN apt-get update && apt-get install -y curl ca-certificates gnupg lsb-release \
+ && install -d /usr/share/postgresql-common/pgdg \
+ && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+      -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+ && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+      > /etc/apt/sources.list.d/pgdg.list \
+ && apt-get update && apt-get install -y postgresql-client-18
+
+# Alpine base
+RUN apk add --no-cache postgresql18-client
+```
+
+Example — a multi-tenant application with a single database isolated by
+Row-Level Security, on a PostgreSQL 18 server:
+
+```dotenv
+VANGUARD_TENANCY_DATABASE_MODE=single
+VANGUARD_BACKUP_CONNECTION=pgsql_backup      # BYPASSRLS, read-only role
+VANGUARD_RESTORE_CONNECTION=pgsql_restore    # table owner, BYPASSRLS
+VANGUARD_PG_DUMP_BINARY=/usr/lib/postgresql/18/bin/pg_dump
+VANGUARD_PSQL_BINARY=/usr/lib/postgresql/18/bin/psql
+VANGUARD_PG_VERSION_CHECK=strict
+```
+
+---
+
+## Encrypted archives (age)
+
+Off by default: archives are plain `.tar` bundles. When backups hold
+sensitive data, Vanguard can encrypt every archive with
+[age](https://age-encryption.org) **before it leaves the machine**, to one or
+more **public** keys. The private key never sits on the server: it is handed
+over at restore time, by the operator, and Vanguard never stores, copies or
+logs it.
+
+**1. Generate the key off the server**, on an admin workstation:
+
+```bash
+age-keygen -o backup-key.txt          # private key: keep it OFF the server
+age-keygen -y backup-key.txt          # prints the public key: age1...
+```
+
+Store `backup-key.txt` somewhere that survives the loss of the server (a
+password manager, an offline copy). **Lose it and the archives are
+unrecoverable.** Two recipients — two keys kept by two people — remove that
+single point of failure.
+
+**2. Install age on the server** (`apt install age`, `brew install age`, …)
+and give Vanguard the public key(s) — runtime variables:
+
+```dotenv
+VANGUARD_ENCRYPTION_ENABLED=true                     # default: false
+VANGUARD_ENCRYPTION_RECIPIENTS=age1...,age1...       # public keys, comma or newline separated
+# VANGUARD_ENCRYPTION_RECIPIENTS_FILE=/etc/backup/recipients.txt   # one per line (age -R)
+# VANGUARD_AGE_BINARY=/usr/bin/age                   # default: auto-detected
+```
+
+SSH public keys (`ssh-ed25519 …`, `ssh-rsa …`) are accepted as recipients too.
+
+**What changes once enabled**
+
+- Archives are stored as `{name}.tar.age` on every destination (local,
+  remote, FTP); the plaintext `.tar` is removed from the tmp directory as soon
+  as it is encrypted.
+- `checksum` stays the SHA-256 of **what is stored** (the encrypted file), so
+  `--no-verify` / `verify_checksum` work unchanged before decryption. The
+  record's `meta.encryption` keeps `format`, the number of `recipients` and
+  the `plaintext_checksum`, checked again after decryption.
+- A backup with no usable recipient, or without the age binary, **fails
+  before anything is dumped**. There is no fallback to a plaintext archive.
+  An unusable setup is also logged at boot, and the health payload gains an
+  `encryption` section (binary, recipient count — never the keys).
+- Download, prune and delete handle `.tar.age` files like any other archive.
+
+**Restoring** — console only:
+
+```bash
+php artisan vanguard:restore 42 --identity=/secure/backup-key.txt
+# or type / pipe the key instead of leaving a file on the server:
+php artisan vanguard:restore 42 --identity-stdin --restore-storage
+```
+
+- Without `--identity` / `--identity-stdin`, an encrypted backup is refused
+  before anything is downloaded.
+- `--identity-stdin` reads the key at a hidden prompt (or from stdin when
+  piped), writes it to a `0600` file under `vanguard.tmp_path` for age to
+  read, and erases it when the restore ends, whatever happened.
+- The dashboard and `POST /api/backups/{id}/restore` refuse encrypted backups
+  with a `400` naming the command to run: a private key must not travel over
+  HTTP nor sit in a queue payload. The dashboard marks them *encrypted* and
+  shows that command in the restore dialog.
+- A key protected by a passphrase makes age ask for it on a terminal: use it
+  with `--identity` from an interactive session.
+- The decrypted archive lives in the session tmp directory (`0700`) for the
+  duration of the restore. Keep `VANGUARD_TMP_PATH` off shared volumes.
+
+**Rotating keys**: add the new public key to the recipients, deploy, then
+remove the old one once its last archive has aged out of retention. Archives
+keep the recipients they were encrypted to.
+
+**Example — multi-tenant application on a single database isolated by
+Row-Level Security** (PostgreSQL 18), holding sensitive data:
+
+```dotenv
+VANGUARD_TENANCY_DATABASE_MODE=single
+VANGUARD_BACKUP_CONNECTION=pgsql_backup       # BYPASSRLS, read-only role
+VANGUARD_RESTORE_CONNECTION=pgsql_restore     # table owner, BYPASSRLS
+VANGUARD_ENCRYPTION_ENABLED=true
+VANGUARD_ENCRYPTION_RECIPIENTS=age1...primary,age1...second-custodian
+VANGUARD_REMOTE_ENABLED=true
+```
+
+The landlord backup dumps the whole shared database through the backup role,
+each tenant backup archives that tenant's files, and every archive is
+encrypted before it is uploaded.
+
+---
+
+## Cloudflare R2
+
+Off by default. R2 speaks the S3 API, so it is used through the existing
+**remote** destination; Vanguard only declares the disk for you. Nothing
+changes for an `s3` disk you already use.
+
+1. In the Cloudflare dashboard, create a bucket (R2 → *Create bucket*). For
+   data that must stay in the EU, choose the **EU jurisdiction** at creation.
+2. Create an R2 API token (*Manage R2 API Tokens*) with the **Object Read &
+   Write** permission, **restricted to that bucket**. Keep the access key id
+   and secret; the account id is shown on the R2 overview page.
+3. Install the S3 adapter and set the runtime variables:
+
+```bash
+composer require league/flysystem-aws-s3-v3
+```
+
+```dotenv
+VANGUARD_R2_ACCOUNT_ID=0123456789abcdef0123456789abcdef
+VANGUARD_R2_ACCESS_KEY_ID=...
+VANGUARD_R2_SECRET_ACCESS_KEY=...
+VANGUARD_R2_BUCKET=app-backups
+# VANGUARD_R2_JURISDICTION=eu        # only for a bucket created in the EU jurisdiction
+# VANGUARD_R2_DISK=vanguard-r2       # disk name (default)
+# VANGUARD_R2_ENDPOINT=              # explicit endpoint, overrides the one built from the account
+
+VANGUARD_REMOTE_ENABLED=true
+VANGUARD_REMOTE_DISK=vanguard-r2
+VANGUARD_REMOTE_PATH=vanguard-backups
+```
+
+With a bucket and an account id (or an endpoint), Vanguard declares this
+disk at registration — the equivalent of:
+
+```php
+'vanguard-r2' => [
+    'driver' => 's3',
+    'key' => env('VANGUARD_R2_ACCESS_KEY_ID'),
+    'secret' => env('VANGUARD_R2_SECRET_ACCESS_KEY'),
+    'region' => 'auto',
+    'bucket' => env('VANGUARD_R2_BUCKET'),
+    'endpoint' => 'https://<account_id>.r2.cloudflarestorage.com', // .eu. with the EU jurisdiction
+    'use_path_style_endpoint' => true,
+    'throw' => true,
+    'request_checksum_calculation' => 'when_required',
+    'response_checksum_validation' => 'when_required',
+],
+```
+
+- **Never overwrites**: a disk already declared under that name in
+  `config/filesystems.php` wins, and no other disk (`s3` included) is touched.
+  To declare it yourself under another name, build it from a service
+  provider with `Vanguard::r2DiskConfig()`.
+- No ACL and no visibility are set: R2 does not implement object ACLs.
+- The two checksum keys stop recent AWS SDKs (3.337+) from adding CRC
+  checksum headers to every request, which S3-compatible services do not all
+  accept; older SDKs ignore them.
+- An unknown `VANGUARD_R2_JURISDICTION` is logged and the disk is not
+  declared — guessing would send archives to another jurisdiction.
+- The health screen's write/read/delete probe covers R2 like any disk, and
+  names the missing `league/flysystem-aws-s3-v3` package when it is absent;
+  `vanguard:install` does too.
+- Retention: Vanguard prunes its own archives (`VANGUARD_RETENTION_DAYS`). An
+  R2 **object lifecycle rule** on the bucket (e.g. delete after 90 days) is a
+  useful second guard, and a **bucket lock** rule protects archives from
+  deletion by a compromised server. Keep the lifecycle longer than Vanguard's
+  retention so the two do not race.
+- R2 charges no egress fees: downloading an archive to restore it costs
+  nothing beyond the operation itself.
+- Combine with [encrypted archives](#encrypted-archives-age) so the bucket
+  only ever holds ciphertext.
+
 ---
 
 ## Restoring a backup
@@ -226,6 +601,7 @@ php artisan vanguard:restore {id}
                   [--database=name]
                   [--no-verify] [--no-db]
                   [--restore-storage] [--wipe-storage]
+                  [--identity=file | --identity-stdin]
                   [--force]
 ```
 
@@ -237,6 +613,8 @@ php artisan vanguard:restore {id}
 | `--no-db` | Restore the filesystem only |
 | `--restore-storage` | Also restore the filesystem (opt-in; the database alone is restored by default) |
 | `--wipe-storage` | Replace instead of merge — see below. Requires `--restore-storage` |
+| `--identity=` | age private key file, for an encrypted archive — see *Encrypted archives* |
+| `--identity-stdin` | Read that key at a hidden prompt, or from stdin when piped |
 | `--force` | Skip every confirmation prompt |
 
 ### Rehearsing a restore (`--database=`)

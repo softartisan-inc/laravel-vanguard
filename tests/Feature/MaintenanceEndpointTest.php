@@ -17,7 +17,7 @@ class MaintenanceEndpointTest extends TestCase
         parent::setUp();
 
         Vanguard::auth(fn ($request) => true);
-        Vanguard::restoreActor(fn () => 'ops@in-immo.app');
+        Vanguard::restoreActor(fn () => 'ops@example.com');
 
         // A tmp base of this test's own, not the shared default the base
         // TestCase points at: a `removed` count that depends on whatever
@@ -125,7 +125,7 @@ class MaintenanceEndpointTest extends TestCase
 
         $logger->shouldHaveReceived('warning')->withArgs(
             fn (string $message, array $context) => $message === '[Vanguard] prune requested'
-                && $context['actor'] === 'ops@in-immo.app'
+                && $context['actor'] === 'ops@example.com'
                 && $context['target'] === 'all-backups'
                 && $context['days'] === 7,
         );
@@ -175,7 +175,7 @@ class MaintenanceEndpointTest extends TestCase
 
         $logger->shouldHaveReceived('warning')->withArgs(
             fn (string $message, array $context) => $message === '[Vanguard] tmp cleanup requested'
-                && $context['actor'] === 'ops@in-immo.app'
+                && $context['actor'] === 'ops@example.com'
                 && $context['hours'] === 6,
         );
     }

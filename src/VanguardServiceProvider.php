@@ -25,6 +25,7 @@ use SoftArtisan\Vanguard\Services\BackupManager;
 use SoftArtisan\Vanguard\Services\BackupStorageManager;
 use SoftArtisan\Vanguard\Services\Drivers\DatabaseDriver;
 use SoftArtisan\Vanguard\Services\Drivers\StorageDriver;
+use SoftArtisan\Vanguard\Services\Encryption\AgeEncryptor;
 use SoftArtisan\Vanguard\Services\RestoreService;
 use SoftArtisan\Vanguard\Services\TenancyResolver;
 
@@ -44,6 +45,8 @@ class VanguardServiceProvider extends ServiceProvider
         if (! class_exists('Vanguard')) {
             class_alias(Vanguard::class, 'Vanguard');
         }
+
+        $this->registerR2Disk();
 
         // Stateless helpers — safe as singletons.
         $this->app->singleton(DatabaseDriver::class);
@@ -72,6 +75,23 @@ class VanguardServiceProvider extends ServiceProvider
     }
 
     /**
+     * Declare the Cloudflare R2 disk when vanguard.r2 is configured (opt-in).
+     *
+     * Nothing happens with the shipped, empty settings. An unknown
+     * jurisdiction must not take the host application down: the disk is not
+     * declared, and the warning is logged once the application has booted
+     * (the remote destination then reports its missing disk as usual).
+     */
+    protected function registerR2Disk(): void
+    {
+        try {
+            Vanguard::registerR2Disk();
+        } catch (\InvalidArgumentException $e) {
+            $this->app->booted(fn () => Log::warning($e->getMessage().' The R2 disk was not declared.'));
+        }
+    }
+
+    /**
      * Bootstrap package services.
      *
      * Registers publishable assets, Artisan commands, routes, views,
@@ -89,6 +109,48 @@ class VanguardServiceProvider extends ServiceProvider
         $this->registerNotificationListeners();
         $this->validateDestinationDisks();
         $this->validateFilesystemPaths();
+        $this->validateDatabaseMode();
+        $this->validateEncryption();
+    }
+
+    /**
+     * Warn at boot about an encryption setup that cannot work.
+     *
+     * Only when vanguard.encryption is enabled, and only a warning — the host
+     * application must keep running — while every backup refuses to start on
+     * it (AgeEncryptor::assertReady()), never falling back to plaintext.
+     */
+    protected function validateEncryption(): void
+    {
+        if (! AgeEncryptor::configuredEnabled()) {
+            return;
+        }
+
+        try {
+            app(AgeEncryptor::class)->assertReady();
+        } catch (\RuntimeException $e) {
+            Log::warning($e->getMessage().' Backups will be refused until it is fixed.');
+        }
+    }
+
+    /**
+     * Warn at boot about an unknown vanguard.tenancy.database_mode.
+     *
+     * Only a warning here — a typo in a backup setting must not take the host
+     * application down — while every backup and restore that depends on the
+     * mode refuses to run on it (TenancyResolver::databaseMode()).
+     */
+    protected function validateDatabaseMode(): void
+    {
+        if (TenancyResolver::databaseModeIsDefault()) {
+            return;
+        }
+
+        try {
+            app(TenancyResolver::class)->databaseMode();
+        } catch (\RuntimeException $e) {
+            Log::warning($e->getMessage().' Tenant backups and restores will be refused until it is fixed.');
+        }
     }
 
     /**

@@ -43,6 +43,12 @@ class PublishedConfigDriftTest extends TestCase
         $this->artisan('vanguard:install --no-interaction')
             ->expectsOutputToContain('notifications.mail.to')
             ->expectsOutputToContain('dump.mysql_options')
+            ->expectsOutputToContain('database.backup_connection')
+            ->expectsOutputToContain('database.restore_connection')
+            ->expectsOutputToContain('tenancy.database_mode')
+            ->expectsOutputToContain('dump.pgsql_version_check')
+            ->expectsOutputToContain('r2.account_id')
+            ->expectsOutputToContain('r2.bucket')
             ->assertSuccessful();
     }
 

@@ -5,6 +5,7 @@ namespace SoftArtisan\Vanguard\Services;
 use Illuminate\Support\Facades\Storage;
 use RuntimeException;
 use SoftArtisan\Vanguard\Models\BackupRecord;
+use SoftArtisan\Vanguard\Services\Encryption\AgeEncryptor;
 use SoftArtisan\Vanguard\Vanguard;
 
 class BackupStorageManager
@@ -148,6 +149,7 @@ class BackupStorageManager
      * @param  array  $files  ['database' => '/tmp/...sql.gz', 'storage' => '/tmp/...tar.gz']
      * @param  string  $name  Base name for the archive
      * @return array ['local_path' => string|null, 'remote_path' => string|null, 'ftp_path' => string|null, 'size' => int, 'checksum' => string]
+     *               plus 'encryption' (format, recipients, plaintext_checksum) when the archive was encrypted
      */
     public function bundle(array $files, string $name): array
     {
@@ -179,15 +181,31 @@ class BackupStorageManager
             throw new RuntimeException('[Vanguard] Failed to bundle backup: '.implode("\n", $out ?? []));
         }
 
+        // Opt-in (vanguard.encryption.enabled): the archive that leaves the
+        // machine is {name}.tar.age, and everything below — checksum, size,
+        // every destination — applies to it. The plaintext tar is removed
+        // here; its checksum is kept so a restore can check what it decrypts.
+        $extension = '.tar';
+        $encryption = null;
+
+        if (AgeEncryptor::configuredEnabled()) {
+            [$bundlePath, $encryption] = $this->encryptBundle($bundlePath);
+            $extension = '.tar'.AgeEncryptor::EXTENSION;
+        }
+
         $checksum = hash_file('sha256', $bundlePath);
         $size = filesize($bundlePath);
         $result = ['size' => $size, 'checksum' => $checksum, 'local_path' => null, 'remote_path' => null, 'ftp_path' => null];
+
+        if ($encryption !== null) {
+            $result['encryption'] = $encryption;
+        }
 
         // Remote first — stream while bundlePath is still on disk.
         // Flysystem's S3 adapter automatically uses multipart upload for large streams.
         if (config('vanguard.destinations.remote.enabled', false)) {
             $remoteDisk = $this->destinationDisk('remote', 's3');
-            $remotePath = config('vanguard.destinations.remote.path', 'vanguard-backups')."/{$name}.tar";
+            $remotePath = config('vanguard.destinations.remote.path', 'vanguard-backups')."/{$name}{$extension}";
             $ok = $this->putStream($remoteDisk, $remotePath, $bundlePath);
             if (! $ok) {
                 throw new RuntimeException("[Vanguard] Failed to write backup to remote disk [{$remoteDisk}]: {$remotePath}");
@@ -198,7 +216,7 @@ class BackupStorageManager
         // FTP/SFTP — stream after remote so bundlePath is still available.
         if (config('vanguard.destinations.ftp.enabled', false)) {
             $ftpDisk = $this->destinationDisk('ftp', 'ftp');
-            $ftpPath = config('vanguard.destinations.ftp.path', 'vanguard-backups')."/{$name}.tar";
+            $ftpPath = config('vanguard.destinations.ftp.path', 'vanguard-backups')."/{$name}{$extension}";
             $ok = $this->putStream($ftpDisk, $ftpPath, $bundlePath);
             if (! $ok) {
                 throw new RuntimeException("[Vanguard] Failed to write backup to FTP disk [{$ftpDisk}]: {$ftpPath}");
@@ -209,7 +227,7 @@ class BackupStorageManager
         // Local last — attempt zero-copy rename(); fall back to stream if needed.
         if (config('vanguard.destinations.local.enabled', true)) {
             $localDisk = $this->destinationDisk('local', 'local');
-            $localPath = config('vanguard.destinations.local.path', 'vanguard-backups')."/{$name}.tar";
+            $localPath = config('vanguard.destinations.local.path', 'vanguard-backups')."/{$name}{$extension}";
             $ok = $this->persistToLocalDisk($bundlePath, $localDisk, $localPath);
             if (! $ok) {
                 throw new RuntimeException("[Vanguard] Failed to write backup to local disk [{$localDisk}]: {$localPath}");
@@ -218,6 +236,35 @@ class BackupStorageManager
         }
 
         return $result;
+    }
+
+    /**
+     * Encrypt the bundle with age and drop the plaintext.
+     *
+     * @param  string  $bundlePath  The plaintext {name}.tar
+     * @return array{0: string, 1: array{format: string, recipients: int, plaintext_checksum: string}}
+     *                                                                                                 The encrypted file's path and what the record keeps about it
+     *
+     * @throws RuntimeException When age fails; no archive is stored then
+     */
+    protected function encryptBundle(string $bundlePath): array
+    {
+        $encryptor = app(AgeEncryptor::class);
+        $encryptedPath = $bundlePath.AgeEncryptor::EXTENSION;
+
+        $plaintextChecksum = hash_file('sha256', $bundlePath);
+
+        try {
+            $encryptor->encrypt($bundlePath, $encryptedPath);
+        } finally {
+            @unlink($bundlePath);
+        }
+
+        return [$encryptedPath, [
+            'format' => AgeEncryptor::FORMAT,
+            'recipients' => $encryptor->recipientCount(),
+            'plaintext_checksum' => $plaintextChecksum,
+        ]];
     }
 
     /**

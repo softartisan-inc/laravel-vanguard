@@ -9,6 +9,7 @@ use SoftArtisan\Vanguard\Models\BackupRecord;
 use SoftArtisan\Vanguard\Models\RestoreRecord;
 use SoftArtisan\Vanguard\Services\Drivers\DatabaseDriver;
 use SoftArtisan\Vanguard\Services\Drivers\StorageDriver;
+use SoftArtisan\Vanguard\Services\Encryption\AgeEncryptor;
 
 class RestoreService
 {
@@ -39,9 +40,13 @@ class RestoreService
      *                          repointing the whole application. Only the database name moves; the
      *                          host, credentials and driver of the target connection are kept, and
      *                          nothing outside this call is reconfigured.
+     *                          - 'identity_file'   (string) — path of the age identity (private key) that
+     *                          decrypts an encrypted archive. Required for one, ignored otherwise. Read
+     *                          by age itself; never copied, logged or stored by this service.
      *                          - 'on_phase'        (callable) — receives (string $phase, array $context = []);
-     *                          announces progress through downloading, verifying, unpacking and the
-     *                          restore halves. Optional; a restore behaves exactly the same without it.
+     *                          announces progress through downloading, verifying, decrypting (encrypted
+     *                          archives only), unpacking and the restore halves. Optional; a restore
+     *                          behaves exactly the same without it.
      * @return bool true on success
      *
      * @throws RuntimeException
@@ -60,7 +65,44 @@ class RestoreService
             throw new RuntimeException("Cannot restore a backup with status [{$record->status}].");
         }
 
+        // In single-database mode a tenant backup holds files only, and the
+        // tenant has no database of its own to redirect: refused before
+        // anything is downloaded.
+        $filesOnly = $record->type === 'tenant' && ! TenancyResolver::databaseModeIsDefault()
+            && app(TenancyResolver::class)->sharesOneDatabase();
+
+        if ($filesOnly && $targetDatabase !== null) {
+            throw new RuntimeException(
+                'A tenant restore cannot be redirected to another database in single-database mode: '
+                .'tenant backups carry no database there, only files.'
+            );
+        }
+
+        // Same mode, and the files are all there is to restore: without
+        // restore_storage the restore would do nothing and still report
+        // success. Refused here, so the API and the queued job refuse it too.
+        if ($filesOnly && ! $restoreStorage) {
+            throw new RuntimeException(
+                'In single-database mode a tenant backup is files only: a tenant restore needs restore_storage '
+                .'(--restore-storage on the console). The shared database is restored from a landlord backup.'
+            );
+        }
+
         [$destination, $storedPath] = $this->resolveSource($record, $destination);
+
+        // An encrypted archive is refused before anything is downloaded when
+        // there is no key to open it with: the download of a large archive
+        // is the slow part, and it would be wasted.
+        $encrypted = AgeEncryptor::isEncryptedRecord($record);
+        $identityFile = $options['identity_file'] ?? null;
+
+        if ($encrypted && (! is_string($identityFile) || $identityFile === '')) {
+            throw new RuntimeException("Backup #{$record->id} is age-encrypted: pass --identity=<file>");
+        }
+
+        if ($encrypted && (! is_file($identityFile) || ! is_readable($identityFile))) {
+            throw new RuntimeException("Backup #{$record->id} is age-encrypted, and the identity file given cannot be read.");
+        }
 
         try {
             Log::info('[Vanguard] Starting restore', ['record_id' => $record->id]);
@@ -76,6 +118,11 @@ class RestoreService
                         "Checksum mismatch for backup #{$record->id}. The file may be corrupted."
                     );
                 }
+            }
+
+            if ($encrypted) {
+                $this->announce($onPhase, 'decrypting');
+                $bundlePath = $this->decrypt($record, $bundlePath, $identityFile, $verify);
             }
 
             $this->announce($onPhase, 'unpacking');
@@ -97,6 +144,38 @@ class RestoreService
         } finally {
             $this->store->cleanTmp();
         }
+    }
+
+    /**
+     * Decrypt a downloaded archive next to it, in the session tmp directory.
+     *
+     * The encrypted copy is removed once decrypted; the plaintext one goes
+     * with the rest of the session directory in cleanTmp(). When the backup
+     * recorded the checksum of its plaintext archive, what comes out of age
+     * must match it — unless verification was turned off for this restore.
+     *
+     * @return string Path of the decrypted .tar
+     *
+     * @throws RuntimeException
+     */
+    protected function decrypt(BackupRecord $record, string $encryptedPath, string $identityFile, bool $verify): string
+    {
+        $plainPath = str_ends_with($encryptedPath, AgeEncryptor::EXTENSION)
+            ? substr($encryptedPath, 0, -strlen(AgeEncryptor::EXTENSION))
+            : $encryptedPath.'.tar';
+
+        app(AgeEncryptor::class)->decrypt($encryptedPath, $identityFile, $plainPath);
+        @unlink($encryptedPath);
+
+        $expected = is_array($record->meta) ? ($record->meta['encryption']['plaintext_checksum'] ?? null) : null;
+
+        if ($verify && is_string($expected) && $expected !== '' && ! $this->store->verifyChecksum($plainPath, $expected)) {
+            throw new RuntimeException(
+                "Checksum mismatch for the decrypted archive of backup #{$record->id}. Refusing to restore it."
+            );
+        }
+
+        return $plainPath;
     }
 
     /**
@@ -166,8 +245,17 @@ class RestoreService
         if ($db && isset($components['database'])) {
             $this->announce($onPhase, 'restoring database');
 
-            $driver = config('database.default');
-            $config = $this->redirect(config("database.connections.{$driver}"), $targetDatabase);
+            if (filled(config('vanguard.database.restore_connection'))) {
+                // vanguard.database.restore_connection: the driver is read
+                // from the connection itself.
+                $config = $this->redirect(app(TenancyResolver::class)->restoreDbConfig(), $targetDatabase);
+                $driver = $config['driver'];
+            } else {
+                // Unchanged when the setting is unset, including the
+                // connection name being what reaches the driver argument.
+                $driver = config('database.default');
+                $config = $this->redirect(config("database.connections.{$driver}"), $targetDatabase);
+            }
 
             $this->preservingCatalogue(function () use ($driver, $config, $components) {
                 $this->db->restore($driver, $config, $components['database']);
@@ -293,10 +381,21 @@ class RestoreService
         $tenantModel = config('vanguard.tenancy.tenant_model', Tenant::class);
         $tenant = $tenantModel::findOrFail($record->tenant_id);
 
+        $singleDatabase = ! TenancyResolver::databaseModeIsDefault() && app(TenancyResolver::class)->sharesOneDatabase();
+
         tenancy()->initialize($tenant);
 
         try {
-            if ($db && isset($components['database'])) {
+            if ($db && $singleDatabase) {
+                // Said rather than skipped in silence: the operator asked for
+                // a database restore, and there is none to perform. The
+                // shared database is restored from a landlord backup.
+                $this->announce($onPhase, 'skipping database', ['reason' => 'single-database mode']);
+                Log::info('[Vanguard] Tenant backups carry no database in single-database mode: database restore skipped', [
+                    'tenant' => $record->tenant_id,
+                    'record_id' => $record->id,
+                ]);
+            } elseif ($db && isset($components['database'])) {
                 $this->announce($onPhase, 'restoring database');
 
                 $resolver = app(TenancyResolver::class);

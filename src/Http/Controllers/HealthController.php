@@ -11,6 +11,7 @@ use SoftArtisan\Vanguard\Console\VanguardScheduler;
 use SoftArtisan\Vanguard\Http\Concerns\ProbesQueueDepth;
 use SoftArtisan\Vanguard\Models\BackupRecord;
 use SoftArtisan\Vanguard\Services\Drivers\DatabaseDriver;
+use SoftArtisan\Vanguard\Services\Encryption\AgeEncryptor;
 use SoftArtisan\Vanguard\Services\TenancyResolver;
 use SoftArtisan\Vanguard\Vanguard;
 
@@ -33,7 +34,7 @@ class HealthController extends Controller
      */
     public function show(): JsonResponse
     {
-        return response()->json([
+        $payload = [
             'destinations' => $this->destinations(),
             'database_clients' => $this->databaseClients(),
             'alerts' => $this->alerts(),
@@ -44,7 +45,74 @@ class HealthController extends Controller
                 'days' => (int) config('vanguard.retention.days', 30),
             ],
             'freshness' => $this->freshness(),
-        ]);
+        ];
+
+        // Only when one is configured, so the payload of an installation
+        // that uses neither is exactly what it was. Names only: the
+        // connection configuration carries credentials.
+        $dedicated = $this->dedicatedConnections();
+
+        if ($dedicated['backup'] !== null || $dedicated['restore'] !== null) {
+            $payload['connections'] = $dedicated;
+        }
+
+        // Same rule: only when archive encryption is enabled.
+        if (AgeEncryptor::configuredEnabled()) {
+            $payload['encryption'] = $this->encryption();
+        }
+
+        return response()->json($payload);
+    }
+
+    /**
+     * Whether new archives can be encrypted: the binary and how many
+     * recipients. Counted, never listed — and no private key is ever here.
+     *
+     * @return array<string, mixed>
+     */
+    protected function encryption(): array
+    {
+        $status = app(AgeEncryptor::class)->status();
+
+        $warning = match (true) {
+            $status['driver'] !== AgeEncryptor::FORMAT => "Unsupported encryption driver [{$status['driver']}]: backups will be refused.",
+            ! $status['binary_present'] => "The age binary [{$status['binary']}] is missing: backups will be refused.",
+            $status['error'] !== null => $status['error'],
+            $status['recipients'] === 0 => 'No recipient configured: backups will be refused.',
+            default => null,
+        };
+
+        return [
+            'driver' => $status['driver'],
+            'binary' => $status['binary'],
+            'binary_present' => $status['binary_present'],
+            'recipients' => $status['recipients'],
+            'ok' => $warning === null,
+            'warning' => $warning,
+        ];
+    }
+
+    /**
+     * The dedicated backup and restore connection names, null when unset.
+     *
+     * @return array{backup: string|null, restore: string|null}
+     */
+    protected function dedicatedConnections(): array
+    {
+        $name = function (string $key): ?string {
+            $value = config($key);
+
+            if (! is_string($value) || trim($value) === '') {
+                return null;
+            }
+
+            return trim($value);
+        };
+
+        return [
+            'backup' => $name('vanguard.database.backup_connection'),
+            'restore' => $name('vanguard.database.restore_connection'),
+        ];
     }
 
     // ─── Destinations ─────────────────────────────────────────────
@@ -125,6 +193,12 @@ class HealthController extends Controller
      */
     protected function probe(string $disk, string $path): array
     {
+        // The R2 disk without its S3 adapter: name the package instead of
+        // relaying Laravel's "class not found".
+        if (($problem = Vanguard::r2DiskProblem($disk)) !== null) {
+            return [false, $problem];
+        }
+
         $key = rtrim($path, '/').'/.vanguard-probe-'.bin2hex(random_bytes(8));
         $payload = 'vanguard-probe';
 
@@ -192,7 +266,62 @@ class HealthController extends Controller
             $rows[$name]['connections'][] = $connection;
         }
 
+        // Opt-in (vanguard.dump.pgsql_version_check): off, the rows are
+        // exactly what they were and the server is not asked anything.
+        $versionCheck = DatabaseDriver::pgVersionCheckMode();
+
+        if ($versionCheck !== DatabaseDriver::PG_VERSION_CHECK_OFF && isset($rows['pgsql'])) {
+            $rows['pgsql'] = $this->withPgVersions($driver, $rows['pgsql'], $versionCheck);
+        }
+
         return array_values($rows);
+    }
+
+    /**
+     * Add the pg_dump and server majors to the pgsql row, and say what a
+     * mismatch means in the configured mode: no backup at all in strict, a
+     * backup that pg_dump will most likely refuse in warn.
+     *
+     * The server asked is the one the dump goes through: the dedicated backup
+     * connection when it is configured, otherwise the central one.
+     *
+     * @param  array<string, mixed>  $row
+     * @return array<string, mixed>
+     */
+    protected function withPgVersions(DatabaseDriver $driver, array $row, string $mode): array
+    {
+        $backup = $this->dedicatedConnections()['backup'];
+        $connection = $backup !== null && in_array($backup, $row['connections'], true)
+            ? $backup
+            : $row['connections'][0];
+
+        try {
+            $report = $driver->pgVersionReport((array) config("database.connections.{$connection}"));
+        } catch (\Throwable $e) {
+            Log::warning('[Vanguard] Could not run the pg_dump version check for the health screen', [
+                'error' => $e->getMessage(),
+            ]);
+
+            return $row;
+        }
+
+        $row['version'] = $report['client'];
+        $row['server_version'] = $report['server'];
+        $row['version_check'] = $mode;
+        $row['version_compatible'] = $report['compatible'];
+
+        if ($report['compatible'] === false) {
+            $row['reason'] = trim(($row['reason'] ?? '').' '.$report['reason']);
+
+            if ($mode === DatabaseDriver::PG_VERSION_CHECK_STRICT) {
+                $row['ok'] = false;
+                $row['degraded'] = false;
+            } elseif ($row['ok']) {
+                $row['degraded'] = true;
+            }
+        }
+
+        return $row;
     }
 
     /**
@@ -215,8 +344,20 @@ class HealthController extends Controller
             $connections[] = $central;
         }
 
+        // The connections the dump and the restore really go through when
+        // dedicated ones are configured (vanguard.database.*).
+        foreach ($this->dedicatedConnections() as $dedicated) {
+            if ($dedicated !== null) {
+                $connections[] = $dedicated;
+            }
+        }
+
         try {
-            if ($this->tenancy->isEnabled()) {
+            // In single-database mode no tenant connection exists: tenant
+            // backups are files, and the shared database is the central one.
+            $singleDatabase = ! TenancyResolver::databaseModeIsDefault() && $this->tenancy->sharesOneDatabase();
+
+            if ($this->tenancy->isEnabled() && ! $singleDatabase) {
                 $tenant = config('tenancy.database.tenant_connection_name', 'tenant');
 
                 if (is_string($tenant) && $tenant !== '') {

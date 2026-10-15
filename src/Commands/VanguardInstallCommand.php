@@ -4,6 +4,7 @@ namespace SoftArtisan\Vanguard\Commands;
 
 use Illuminate\Console\Command;
 use SoftArtisan\Vanguard\Services\Drivers\DatabaseDriver;
+use SoftArtisan\Vanguard\Vanguard;
 
 class VanguardInstallCommand extends Command
 {
@@ -155,6 +156,18 @@ class VanguardInstallCommand extends Command
         $this->line('     <comment>],</comment>');
         $this->newLine();
 
+        $this->line('  <info>4b. Cloudflare R2</info> — S3-compatible, used as the remote destination:');
+        $this->line('     <comment>composer require league/flysystem-aws-s3-v3</comment>');
+        $this->line('     Vanguard declares the disk itself once these are set (no filesystems.php entry):');
+        $this->line('     <comment>VANGUARD_R2_ACCOUNT_ID=</comment>');
+        $this->line('     <comment>VANGUARD_R2_ACCESS_KEY_ID=</comment>');
+        $this->line('     <comment>VANGUARD_R2_SECRET_ACCESS_KEY=</comment>');
+        $this->line('     <comment>VANGUARD_R2_BUCKET=</comment>');
+        $this->line('     <comment># VANGUARD_R2_JURISDICTION=eu   # only for an EU-jurisdiction bucket</comment>');
+        $this->line('     <comment>VANGUARD_REMOTE_ENABLED=true</comment>');
+        $this->line('     <comment>VANGUARD_REMOTE_DISK=vanguard-r2</comment>');
+        $this->newLine();
+
         $this->line('  <info>5. Environment variables</info> — add to <comment>.env</comment> as needed:');
         $this->line('     <comment>VANGUARD_QUEUE_CONNECTION=redis</comment>');
         $this->line('     <comment>VANGUARD_QUEUE_NAME=vanguard</comment>');
@@ -167,6 +180,20 @@ class VanguardInstallCommand extends Command
         $this->line('     <comment># Alerts — without an address a failing backup stays silent:</comment>');
         $this->line('     <comment>VANGUARD_NOTIFY_FAILURE=true</comment>');
         $this->line('     <comment>VANGUARD_NOTIFY_MAIL=ops@example.com</comment>');
+        $this->line('     <comment># Dedicated dump/restore connections (names from config/database.php),</comment>');
+        $this->line('     <comment># e.g. for PostgreSQL Row-Level Security — unset = application connection:</comment>');
+        $this->line('     <comment>VANGUARD_BACKUP_CONNECTION=</comment>');
+        $this->line('     <comment>VANGUARD_RESTORE_CONNECTION=</comment>');
+        $this->line('     <comment># One database shared by all tenants (multi = one per tenant, default):</comment>');
+        $this->line('     <comment>VANGUARD_TENANCY_DATABASE_MODE=multi</comment>');
+        $this->line('     <comment># Encrypt archives with age to public keys (generate the key pair OFF the server):</comment>');
+        $this->line('     <comment>VANGUARD_ENCRYPTION_ENABLED=false</comment>');
+        $this->line('     <comment>VANGUARD_ENCRYPTION_RECIPIENTS=age1...</comment>');
+        $this->line('     <comment>VANGUARD_ENCRYPTION_RECIPIENTS_FILE=</comment>');
+        $this->line('     <comment>VANGUARD_AGE_BINARY=</comment>');
+        $this->line('     <comment># PostgreSQL: compare pg_dump and server majors before each dump (off|warn|strict):</comment>');
+        $this->line('     <comment>VANGUARD_PG_VERSION_CHECK=off</comment>');
+        $this->line('     <comment>VANGUARD_PG_DUMP_BINARY=</comment>');
         $this->line('     # Remote (S3):');
         $this->line('     <comment>VANGUARD_REMOTE_ENABLED=false</comment>');
         $this->line('     <comment>VANGUARD_REMOTE_DISK=s3</comment>');
@@ -211,6 +238,15 @@ class VanguardInstallCommand extends Command
                 $this->newLine();
                 $this->warn("⚠  The {$label} destination is enabled but disk [{$disk}] is not declared in config/filesystems.php.");
                 $this->warn('   Add the disk configuration before running backups (see step 4 of next steps).');
+
+                continue;
+            }
+
+            // A disk declared from vanguard.r2 counts as declared; it still
+            // needs the S3 adapter.
+            if (is_string($disk) && ($problem = Vanguard::r2DiskProblem($disk)) !== null) {
+                $this->newLine();
+                $this->warn("⚠  {$problem}");
             }
         }
     }
