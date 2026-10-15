@@ -11,6 +11,7 @@ use SoftArtisan\Vanguard\Jobs\RunTenantBackupJob;
 use SoftArtisan\Vanguard\Models\BackupRecord;
 use SoftArtisan\Vanguard\Services\Drivers\DatabaseDriver;
 use SoftArtisan\Vanguard\Services\Drivers\StorageDriver;
+use SoftArtisan\Vanguard\Services\Encryption\AgeEncryptor;
 
 class BackupManager
 {
@@ -48,6 +49,7 @@ class BackupManager
     public function backupLandlord(array $options = []): BackupRecord
     {
         $this->assertSufficientDiskSpace();
+        $this->assertEncryptionReady();
 
         $record = $this->createRecord(null, 'landlord', $options);
         $emptyFilesystem = null;
@@ -131,6 +133,7 @@ class BackupManager
         }
 
         $this->assertSufficientDiskSpace();
+        $this->assertEncryptionReady();
 
         $tenantId = $tenant->getTenantKey();
         $record = $singleDatabase
@@ -204,6 +207,7 @@ class BackupManager
     public function backupFilesystem(array $options = []): BackupRecord
     {
         $this->assertSufficientDiskSpace();
+        $this->assertEncryptionReady();
 
         $record = $this->createRecord(null, 'filesystem', $options);
         $emptyFilesystem = null;
@@ -408,6 +412,24 @@ class BackupManager
     }
 
     /**
+     * Refuse a backup that would have to be encrypted and could not be.
+     *
+     * Only when vanguard.encryption is enabled — otherwise nothing is called.
+     * Checked before the record and the dump, beside the disk-space check: a
+     * missing age binary or recipient is a configuration error, and finding
+     * it after an hour of dumping would only waste the hour. There is no
+     * fallback to a plaintext archive.
+     *
+     * @throws RuntimeException
+     */
+    protected function assertEncryptionReady(): void
+    {
+        if (AgeEncryptor::configuredEnabled()) {
+            app(AgeEncryptor::class)->assertReady();
+        }
+    }
+
+    /**
      * Create and persist a new BackupRecord in 'running' status.
      *
      * @param  string|null  $tenantId  Null for landlord/filesystem backups
@@ -444,7 +466,7 @@ class BackupManager
      */
     protected function completeRecord(BackupRecord $record, array $bundle): void
     {
-        $this->finishRecord($record, [
+        $attributes = [
             'status' => 'completed',
             'file_path' => $bundle['local_path'],
             'remote_path' => $bundle['remote_path'],
@@ -452,7 +474,20 @@ class BackupManager
             'file_size' => $bundle['size'],
             'checksum' => $bundle['checksum'],
             'completed_at' => now(),
-        ]);
+        ];
+
+        // Only an encrypted archive carries the key: the meta column of a
+        // plaintext backup is left exactly as it was. Encoded by hand because
+        // finishRecord() writes through the query builder, which does not
+        // apply the model's casts.
+        if (isset($bundle['encryption'])) {
+            $attributes['meta'] = json_encode(
+                array_merge((array) $record->meta, ['encryption' => $bundle['encryption']]),
+                JSON_THROW_ON_ERROR,
+            );
+        }
+
+        $this->finishRecord($record, $attributes);
     }
 
     /**
