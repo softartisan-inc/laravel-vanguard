@@ -265,13 +265,16 @@ VANGUARD_TENANCY_DATABASE_MODE=single   # default: multi
 | Tenant backup | tenant DB (+ files when asked) | **tenant files only** (`storage_path()` of the tenant) |
 | Tenant connection read | yes | never |
 | `--no-filesystem` on a tenant | DB only | **refused**: nothing to back up |
-| Tenant restore | tenant DB (+ files) | **files only**; `--restore-storage` required, `--database` refused |
+| Tenant restore | tenant DB (+ files) | **files only**; `--restore-storage` (API: `restore_storage=true`) required, `--database` refused |
 
 - Schedule both: `schedule.landlord` (the shared database) and
   `schedule.tenants` (each tenant's files). Both are on by default.
 - Tenant records carry `sources = ["filesystem"]` and
   `meta.database_mode = "single"`; the dashboard labels tenant backups
   *files only*.
+- A tenant restore without the files is refused everywhere — console,
+  API (400) and queued job — before anything is downloaded: it would restore
+  nothing. The dashboard's restore dialog asks for the files in this mode.
 - A database restore asked for on a tenant backup is announced
   (`skipping database`) and logged, never silently skipped.
 - **Limit:** restoring the rows of a single tenant out of the shared database
@@ -317,15 +320,18 @@ VANGUARD_RESTORE_CONNECTION=pgsql_restore   # default: unset
 The roles, on the PostgreSQL side:
 
 ```sql
--- Dump: sees every row, cannot write anything
+-- Dump: sees every row, cannot write anything.
+-- FOR ROLE names the role that creates the tables (the one migrations run
+-- as): without it the default privileges only cover objects created by
+-- whoever runs this statement, and the next migration's tables are unreadable.
 CREATE ROLE app_backup LOGIN PASSWORD '...' BYPASSRLS;
 ALTER ROLE app_backup SET default_transaction_read_only = on;
 GRANT CONNECT ON DATABASE app TO app_backup;
 GRANT USAGE ON SCHEMA public TO app_backup;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO app_backup;
 GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO app_backup;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO app_backup;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON SEQUENCES TO app_backup;
+ALTER DEFAULT PRIVILEGES FOR ROLE app_owner IN SCHEMA public GRANT SELECT ON TABLES TO app_backup;
+ALTER DEFAULT PRIVILEGES FOR ROLE app_owner IN SCHEMA public GRANT SELECT ON SEQUENCES TO app_backup;
 
 -- Restore: owns the tables, so it can recreate them, and bypasses RLS
 ALTER ROLE app_owner BYPASSRLS;

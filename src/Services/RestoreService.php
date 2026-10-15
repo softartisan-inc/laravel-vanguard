@@ -68,11 +68,23 @@ class RestoreService
         // In single-database mode a tenant backup holds files only, and the
         // tenant has no database of its own to redirect: refused before
         // anything is downloaded.
-        if ($record->type === 'tenant' && $targetDatabase !== null && ! TenancyResolver::databaseModeIsDefault()
-            && app(TenancyResolver::class)->sharesOneDatabase()) {
+        $filesOnly = $record->type === 'tenant' && ! TenancyResolver::databaseModeIsDefault()
+            && app(TenancyResolver::class)->sharesOneDatabase();
+
+        if ($filesOnly && $targetDatabase !== null) {
             throw new RuntimeException(
                 'A tenant restore cannot be redirected to another database in single-database mode: '
                 .'tenant backups carry no database there, only files.'
+            );
+        }
+
+        // Same mode, and the files are all there is to restore: without
+        // restore_storage the restore would do nothing and still report
+        // success. Refused here, so the API and the queued job refuse it too.
+        if ($filesOnly && ! $restoreStorage) {
+            throw new RuntimeException(
+                'In single-database mode a tenant backup is files only: a tenant restore needs restore_storage '
+                .'(--restore-storage on the console). The shared database is restored from a landlord backup.'
             );
         }
 

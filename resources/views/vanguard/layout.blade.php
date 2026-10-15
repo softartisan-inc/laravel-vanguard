@@ -18,13 +18,26 @@
     Mount point for the Vue application.
     Config is passed via data attributes — no inline JS, no global variables.
 --}}
+@php
+    // 'single' only when the mode really is single: an invalid value is
+    // refused wherever a backup runs, and must not make the dashboard say
+    // tenant backups are "files only".
+    $vanguardDatabaseMode = 'multi';
+    if (! \SoftArtisan\Vanguard\Services\TenancyResolver::databaseModeIsDefault()) {
+        try {
+            $vanguardDatabaseMode = app(\SoftArtisan\Vanguard\Services\TenancyResolver::class)->sharesOneDatabase() ? 'single' : 'multi';
+        } catch (\RuntimeException) {
+            $vanguardDatabaseMode = 'multi';
+        }
+    }
+@endphp
 <div
     id="vanguard-app"
     data-base-path="{{ rtrim(Vanguard::path(), '/') }}"
     data-csrf-token="{{ csrf_token() }}"
     data-realtime-driver="{{ config('vanguard.realtime.driver', 'polling') }}"
     data-poll-interval="{{ config('vanguard.realtime.interval', 5) }}"
-    data-database-mode="{{ \SoftArtisan\Vanguard\Services\TenancyResolver::databaseModeIsDefault() ? 'multi' : 'single' }}"
+    data-database-mode="{{ $vanguardDatabaseMode }}"
 ></div>
 
 <script src="{{ Vanguard::assetUrl('vanguard.js') }}"></script>

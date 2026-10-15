@@ -587,6 +587,18 @@ class BackupsApiController extends Controller
             ], 400);
         }
 
+        // Single-database mode (opt-in): a tenant backup is files only, so a
+        // restore without restore_storage would restore nothing. Refused like
+        // the other business errors, rather than queued and marked completed.
+        if ($record->type === 'tenant' && ! $request->boolean('restore_storage', false)
+            && ! TenancyResolver::databaseModeIsDefault()
+            && app(TenancyResolver::class)->sharesOneDatabase()) {
+            return response()->json([
+                'error' => "Backup #{$record->id} is a tenant backup in single-database mode, which holds files only: "
+                    .'send restore_storage=true to restore them. The shared database is restored from a landlord backup.',
+            ], 400);
+        }
+
         $restore = RestoreRecord::on($central)->create([
             'backup_id' => $record->id,
             // Copied, not looked up: the history has to survive the deletion

@@ -24,8 +24,10 @@ the health payload and the dashboard behave exactly as in 2.6.1.
   (runtime, default `multi`) for applications that keep every tenant in one
   shared database: the database is backed up once by the landlord backup, a
   tenant backup holds the tenant's files only, and no tenant connection is
-  ever read. Tenant restores are files only in that mode. Restoring a single
-  tenant's rows out of the shared database is not covered.
+  ever read. Tenant restores are files only in that mode, and one without
+  `restore_storage` is refused by the console, the restore endpoint (`400`)
+  and the restore job alike, since it would restore nothing. Restoring a
+  single tenant's rows out of the shared database is not covered.
 - **Encrypted archives (age)** — `VANGUARD_ENCRYPTION_ENABLED` (runtime,
   default `false`) encrypts every new archive with age to the public keys in
   `VANGUARD_ENCRYPTION_RECIPIENTS` / `VANGUARD_ENCRYPTION_RECIPIENTS_FILE`,

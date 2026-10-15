@@ -34,7 +34,12 @@
 
         <template v-else>
         <div class="form-group">
-          <div class="form-hint form-hint-danger">
+          <div v-if="filesOnly" class="form-hint form-hint-danger">
+            Single-database mode: this backup holds files only. Restoring it overwrites the
+            files of <strong>{{ target }}</strong> with those of a backup taken on {{ takenAt }}.
+            There is no way back. The shared database is restored from a landlord backup.
+          </div>
+          <div v-else class="form-hint form-hint-danger">
             This overwrites the live database of <strong>{{ target }}</strong> with the
             contents of a backup taken on {{ takenAt }}. There is no way back.
           </div>
@@ -71,7 +76,7 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, inject, ref } from 'vue'
 import { useBackups } from '../composables/useBackups.js'
 import { useToast }   from '../composables/useToast.js'
 
@@ -97,6 +102,11 @@ const target = computed(() => props.record.tenant_id || props.record.type)
 
 const matches = computed(() => confirmation.value === target.value)
 
+// One database shared by every tenant: a tenant backup is its files and
+// nothing else, so the files are what the restore has to ask for. Without
+// them the server refuses the request, since it would restore nothing.
+const filesOnly = inject('databaseMode', 'multi') === 'single' && props.record.type === 'tenant'
+
 const takenAt = computed(() =>
   props.record.created_at ? new Date(props.record.created_at).toLocaleString() : 'an unknown date',
 )
@@ -117,7 +127,7 @@ async function submit() {
 
   running.value = true
   try {
-    const res = await restoreBackup(props.record.id, confirmation.value)
+    const res = await restoreBackup(props.record.id, confirmation.value, filesOnly ? { restore_storage: true } : {})
     // Queued, not done: the endpoint answers 202 with a pending restore id and
     // the work happens on a worker. Saying "completed" here would be a claim
     // nothing has verified.

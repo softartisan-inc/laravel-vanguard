@@ -3,11 +3,15 @@
 namespace SoftArtisan\Vanguard\Tests\Feature;
 
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Schema;
 use Mockery;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Test;
 use RuntimeException;
+use SoftArtisan\Vanguard\Jobs\RunRestoreJob;
 use SoftArtisan\Vanguard\Models\BackupRecord;
+use SoftArtisan\Vanguard\Models\RestoreRecord;
 use SoftArtisan\Vanguard\Services\BackupManager;
 use SoftArtisan\Vanguard\Services\BackupStorageManager;
 use SoftArtisan\Vanguard\Services\Drivers\DatabaseDriver;
@@ -326,6 +330,74 @@ class SingleDatabaseTenancyTest extends TestCase
         $this->artisan("vanguard:restore {$record->id} --force")
             ->expectsOutputToContain('files only')
             ->expectsOutputToContain('restored from a landlord backup')
+            ->assertFailed();
+    }
+
+    /**
+     * @return array<string, array{0: array<string, mixed>}>
+     */
+    public static function restoreStorageNotRequested(): array
+    {
+        return [
+            'restore_storage absent' => [[]],
+            'restore_storage false' => [['restore_storage' => false]],
+        ];
+    }
+
+    #[Test]
+    #[DataProvider('restoreStorageNotRequested')]
+    public function the_service_refuses_a_tenant_restore_that_would_restore_nothing(array $options): void
+    {
+        $tenant = $this->makeTenant('tenant-a');
+        $record = $this->makeRecord(['type' => 'tenant', 'tenant_id' => $tenant->getTenantKey(), 'checksum' => null]);
+
+        $store = Mockery::mock(BackupStorageManager::class);
+        $store->shouldNotReceive('download');
+        $service = new RestoreService(Mockery::mock(DatabaseDriver::class), Mockery::mock(StorageDriver::class), $store);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('restore_storage');
+
+        $service->restore($record, array_merge(['verify_checksum' => false, 'restore_db' => true], $options));
+    }
+
+    #[Test]
+    #[DataProvider('restoreStorageNotRequested')]
+    public function the_api_refuses_a_tenant_restore_that_would_restore_nothing(array $options): void
+    {
+        Queue::fake();
+        $tenant = $this->makeTenant('tenant-a');
+        $record = $this->makeRecord(['type' => 'tenant', 'tenant_id' => $tenant->getTenantKey()]);
+
+        $this->postJson("/vanguard/api/backups/{$record->id}/restore", array_merge(['confirm' => 'tenant-a'], $options))
+            ->assertStatus(400)
+            ->assertJsonPath('error', fn ($error) => str_contains($error, 'restore_storage'));
+
+        $this->assertSame(0, RestoreRecord::count(), 'nothing is queued for a restore that would restore nothing');
+        Queue::assertNothingPushed();
+    }
+
+    #[Test]
+    public function the_api_queues_a_tenant_restore_of_the_files(): void
+    {
+        Queue::fake();
+        $tenant = $this->makeTenant('tenant-a');
+        $record = $this->makeRecord(['type' => 'tenant', 'tenant_id' => $tenant->getTenantKey()]);
+
+        $this->postJson("/vanguard/api/backups/{$record->id}/restore", ['confirm' => 'tenant-a', 'restore_storage' => true])
+            ->assertStatus(202);
+
+        Queue::assertPushed(RunRestoreJob::class);
+    }
+
+    #[Test]
+    public function the_console_refuses_database_for_a_tenant_restore_before_asking_anything(): void
+    {
+        $tenant = $this->makeTenant('tenant-a');
+        $record = $this->makeRecord(['type' => 'tenant', 'tenant_id' => $tenant->getTenantKey()]);
+
+        $this->artisan("vanguard:restore {$record->id} --database=rehearsal --restore-storage")
+            ->expectsOutputToContain('--database does not apply here')
             ->assertFailed();
     }
 
