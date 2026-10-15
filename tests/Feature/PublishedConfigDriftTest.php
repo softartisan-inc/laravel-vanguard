@@ -45,6 +45,7 @@ class PublishedConfigDriftTest extends TestCase
             ->expectsOutputToContain('dump.mysql_options')
             ->expectsOutputToContain('database.backup_connection')
             ->expectsOutputToContain('database.restore_connection')
+            ->expectsOutputToContain('tenancy.database_mode')
             ->assertSuccessful();
     }
 

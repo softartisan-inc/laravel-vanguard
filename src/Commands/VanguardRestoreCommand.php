@@ -9,6 +9,7 @@ use SoftArtisan\Vanguard\Events\RestoreStarted;
 use SoftArtisan\Vanguard\Models\BackupRecord;
 use SoftArtisan\Vanguard\Models\RestoreRecord;
 use SoftArtisan\Vanguard\Services\RestoreService;
+use SoftArtisan\Vanguard\Services\TenancyResolver;
 use SoftArtisan\Vanguard\Vanguard;
 
 class VanguardRestoreCommand extends Command
@@ -70,6 +71,25 @@ class VanguardRestoreCommand extends Command
             return self::FAILURE;
         }
 
+        // In single-database mode a tenant backup is the tenant's files and
+        // nothing else: the shared database comes back from a landlord backup.
+        $filesOnly = $record->type === 'tenant'
+            && ! TenancyResolver::databaseModeIsDefault()
+            && app(TenancyResolver::class)->sharesOneDatabase();
+
+        if ($filesOnly && $targetDatabase !== null) {
+            $this->error('--database does not apply here: in single-database mode a tenant backup is files only, with no database to redirect.');
+
+            return self::FAILURE;
+        }
+
+        if ($filesOnly && ! $this->option('restore-storage')) {
+            $this->error('In single-database mode a tenant backup is files only: add --restore-storage to restore them.');
+            $this->line('The shared database is restored from a landlord backup.');
+
+            return self::FAILURE;
+        }
+
         $reached = $record->reachedDestinations();
         $source = $this->option('source') ?: array_key_first($reached);
 
@@ -83,7 +103,9 @@ class VanguardRestoreCommand extends Command
             ['Status',   $record->status],
             ['Stored on', $reached !== [] ? implode(', ', array_keys($reached)) : '<fg=red>nowhere</>'],
             ['Reads from', $source ?? '<fg=red>nothing — this archive reached no destination</>'],
-            ['Writes to', $targetDatabase ?? "the target's own database"],
+            ['Writes to', $filesOnly
+                ? 'files only (single-database mode: a tenant backup holds no database)'
+                : ($targetDatabase ?? "the target's own database")],
         ]);
 
         // Said again, in its own line, before the prompt: a rehearsal that

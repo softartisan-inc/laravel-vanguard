@@ -37,6 +37,17 @@ class VanguardBackupCommand extends Command
             'include_filesystem' => ! $this->option('no-filesystem'),
         ];
 
+        // Refused here as well as in BackupManager, so the console answers
+        // with a message rather than a stack trace.
+        if (($this->option('tenant') || $this->option('all-tenants'))
+            && $this->option('no-filesystem')
+            && ! TenancyResolver::databaseModeIsDefault()
+            && $tenancy->sharesOneDatabase()) {
+            $this->error('Refused: '.BackupManager::NOTHING_TO_BACK_UP_FOR_TENANT);
+
+            return self::FAILURE;
+        }
+
         // --queue promises to dispatch even when the queue is disabled in
         // config. It used to be declared and read by nobody, so the flag ran
         // the backup inline like any other invocation.

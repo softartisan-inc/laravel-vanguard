@@ -35,10 +35,25 @@ return [
     | discover tenants and allow per-tenant backup operations.
     |
     | 'tenant_model' must implement Stancl\Tenancy\Contracts\Tenant
+    |
+    | 'database_mode' (runtime) — how tenants map to databases:
+    |   'multi'  (default) one database per tenant: every tenant backup dumps
+    |            the tenant's own database (and its files when asked).
+    |   'single' one database shared by every tenant, e.g. isolated by
+    |            PostgreSQL Row-Level Security. The shared database is dumped
+    |            once, by the landlord backup (see 'database' below for a
+    |            dedicated connection), and a tenant backup holds the tenant's
+    |            files only — storage_path() as stancl/tenancy's
+    |            FilesystemTenancyBootstrapper sets it for that tenant. No
+    |            tenant database connection is ever read. Restoring a tenant
+    |            backup restores its files; restoring one tenant's rows out of
+    |            the shared database is not covered.
+    | Any other value is reported at boot and refused by tenant backups.
     */
     'tenancy' => [
         'enabled' => env('VANGUARD_TENANCY_ENABLED', true),
         'tenant_model' => env('VANGUARD_TENANT_MODEL', Tenant::class),
+        'database_mode' => env('VANGUARD_TENANCY_DATABASE_MODE', 'multi'),
     ],
 
     /*

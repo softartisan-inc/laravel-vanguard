@@ -14,6 +14,13 @@ use SoftArtisan\Vanguard\Services\Drivers\StorageDriver;
 
 class BackupManager
 {
+    /**
+     * Why a tenant backup without files is refused in single-database mode.
+     */
+    public const NOTHING_TO_BACK_UP_FOR_TENANT = 'nothing to back up for a tenant in single-database mode: '
+        .'the shared database is backed up by the landlord backup, and a tenant backup is the tenant\'s files. '
+        .'Drop --no-filesystem (include_filesystem=false) and keep vanguard.sources.filesystem enabled.';
+
     public function __construct(
         protected DatabaseDriver $db,
         protected StorageDriver $storage,
@@ -99,30 +106,49 @@ class BackupManager
      * Initialises the tenancy context via TenancyResolver::runForTenant() to
      * ensure the correct database connection is active during the dump.
      *
+     * In single-database mode (vanguard.tenancy.database_mode = 'single') there
+     * is no tenant database to dump: the shared database is the landlord
+     * backup's, so a tenant backup is the tenant's files only, and it includes
+     * them by default. A tenant backup asked to leave the files out is refused
+     * before any record is written — it would be an empty archive.
+     *
      * @param  mixed  $tenant  A tenant model instance (must implement getTenantKey())
      * @param  array  $options  Supported keys:
-     *                          - 'include_filesystem' (bool) — default false for tenant backups
+     *                          - 'include_filesystem' (bool) — default false for tenant backups,
+     *                          true in single-database mode
      * @return BackupRecord A freshly reloaded record with final status
      *
+     * @throws RuntimeException In single-database mode, when there is nothing to back up
      * @throws \Throwable Re-throws any exception after recording the failure
      */
     public function backupTenant(mixed $tenant, array $options = []): BackupRecord
     {
+        $singleDatabase = ! TenancyResolver::databaseModeIsDefault() && $this->tenancy->sharesOneDatabase();
+        $includeFilesystem = (bool) ($options['include_filesystem'] ?? $singleDatabase);
+
+        if ($singleDatabase && (! $includeFilesystem || ! config('vanguard.sources.filesystem', true))) {
+            throw new RuntimeException('[Vanguard] '.self::NOTHING_TO_BACK_UP_FOR_TENANT);
+        }
+
         $this->assertSufficientDiskSpace();
 
         $tenantId = $tenant->getTenantKey();
-        $record = $this->createRecord($tenantId, 'tenant', $options);
+        $record = $singleDatabase
+            ? $this->createRecord($tenantId, 'tenant', $options + ['database_mode' => 'single'], ['filesystem'])
+            : $this->createRecord($tenantId, 'tenant', $options);
         $emptyFilesystem = null;
 
         try {
             event(new BackupStarted($record));
 
-            $this->tenancy->runForTenant($tenant, function () use ($tenant, $record, $options, &$files, &$name, &$emptyFilesystem) {
+            $this->tenancy->runForTenant($tenant, function () use ($tenant, $record, $includeFilesystem, $singleDatabase, &$files, &$name, &$emptyFilesystem) {
                 $files = [];
                 $name = "tenant_{$tenant->getTenantKey()}_{$record->id}_".now()->format('Ymd_His');
 
-                // Tenant database
-                if (config('vanguard.sources.tenant_databases', true)) {
+                // Tenant database — none in single-database mode, where no
+                // tenant connection exists and the shared database is the
+                // landlord backup's.
+                if (! $singleDatabase && config('vanguard.sources.tenant_databases', true)) {
                     $dbConf = $this->tenancy->tenantDbConfig();
                     $files['database'] = $this->db->dump(
                         driver: $dbConf['driver'],
@@ -132,7 +158,7 @@ class BackupManager
                 }
 
                 // Tenant storage (if tenant has its own storage disk)
-                if (config('vanguard.sources.filesystem', true) && ($options['include_filesystem'] ?? false)) {
+                if (config('vanguard.sources.filesystem', true) && $includeFilesystem) {
                     // Resolved inside the tenancy window on purpose:
                     // stancl/tenancy has swapped storage_path() to the
                     // tenant's own root, which is the root the diagnosis has
@@ -387,15 +413,17 @@ class BackupManager
      * @param  string|null  $tenantId  Null for landlord/filesystem backups
      * @param  string  $type  'landlord'|'tenant'|'filesystem'
      * @param  array  $meta  Arbitrary options stored on the record
+     * @param  array<int, string>|null  $sources  What this backup holds; null for
+     *                                            the configured sources
      */
-    protected function createRecord(?string $tenantId, string $type, array $meta = []): BackupRecord
+    protected function createRecord(?string $tenantId, string $type, array $meta = [], ?array $sources = null): BackupRecord
     {
         return BackupRecord::create([
             'tenant_id' => $tenantId,
             'type' => $type,
             'status' => 'running',
             'started_at' => now(),
-            'sources' => array_keys(array_filter([
+            'sources' => $sources ?? array_keys(array_filter([
                 'landlord_database' => config('vanguard.sources.landlord_database'),
                 'tenant_databases' => config('vanguard.sources.tenant_databases'),
                 'filesystem' => config('vanguard.sources.filesystem'),

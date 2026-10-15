@@ -150,6 +150,67 @@ class TenancyResolver
     }
 
     /**
+     * The supported values of vanguard.tenancy.database_mode.
+     */
+    public const DATABASE_MODES = ['multi', 'single'];
+
+    /**
+     * How tenants map to databases: 'multi' or 'single'.
+     *
+     * 'multi' (default) is one database per tenant — stancl/tenancy's
+     * DatabaseTenancyBootstrapper — and every tenant backup dumps its own.
+     * 'single' is one database shared by every tenant (isolated by
+     * Row-Level Security, for instance): it is dumped once, by the landlord
+     * backup, and a tenant backup is the tenant's files only.
+     *
+     * Unset or empty means 'multi'.
+     *
+     * @throws RuntimeException On any other value: guessing would either dump
+     *                          nothing or try a connection that does not exist
+     */
+    public function databaseMode(): string
+    {
+        $mode = strtolower(trim((string) config('vanguard.tenancy.database_mode', 'multi')));
+
+        if ($mode === '') {
+            return 'multi';
+        }
+
+        if (! in_array($mode, self::DATABASE_MODES, true)) {
+            throw new RuntimeException(sprintf(
+                '[Vanguard] vanguard.tenancy.database_mode must be one of [%s], got [%s].',
+                implode(', ', self::DATABASE_MODES),
+                $mode,
+            ));
+        }
+
+        return $mode;
+    }
+
+    /**
+     * Whether every tenant lives in one shared database (database_mode 'single').
+     */
+    public function sharesOneDatabase(): bool
+    {
+        return $this->databaseMode() === 'single';
+    }
+
+    /**
+     * Whether vanguard.tenancy.database_mode is left at its default ('multi').
+     *
+     * Read from config alone, without an instance: callers check it first so
+     * that, at the default, they make exactly the resolver calls they made
+     * before the setting existed — a resolver extended or mocked by the host
+     * application is not asked about a method it may not know.
+     */
+    public static function databaseModeIsDefault(): bool
+    {
+        $mode = strtolower(trim((string) config('vanguard.tenancy.database_mode', 'multi')));
+
+        return $mode === '' || $mode === 'multi';
+    }
+
+    /**
      * Get the DB connection config the landlord (global) dump runs through.
      *
      * vanguard.database.backup_connection names a connection of its own for

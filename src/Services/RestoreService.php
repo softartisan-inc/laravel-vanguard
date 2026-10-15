@@ -60,6 +60,17 @@ class RestoreService
             throw new RuntimeException("Cannot restore a backup with status [{$record->status}].");
         }
 
+        // In single-database mode a tenant backup holds files only, and the
+        // tenant has no database of its own to redirect: refused before
+        // anything is downloaded.
+        if ($record->type === 'tenant' && $targetDatabase !== null && ! TenancyResolver::databaseModeIsDefault()
+            && app(TenancyResolver::class)->sharesOneDatabase()) {
+            throw new RuntimeException(
+                'A tenant restore cannot be redirected to another database in single-database mode: '
+                .'tenant backups carry no database there, only files.'
+            );
+        }
+
         [$destination, $storedPath] = $this->resolveSource($record, $destination);
 
         try {
@@ -302,10 +313,21 @@ class RestoreService
         $tenantModel = config('vanguard.tenancy.tenant_model', Tenant::class);
         $tenant = $tenantModel::findOrFail($record->tenant_id);
 
+        $singleDatabase = ! TenancyResolver::databaseModeIsDefault() && app(TenancyResolver::class)->sharesOneDatabase();
+
         tenancy()->initialize($tenant);
 
         try {
-            if ($db && isset($components['database'])) {
+            if ($db && $singleDatabase) {
+                // Said rather than skipped in silence: the operator asked for
+                // a database restore, and there is none to perform. The
+                // shared database is restored from a landlord backup.
+                $this->announce($onPhase, 'skipping database', ['reason' => 'single-database mode']);
+                Log::info('[Vanguard] Tenant backups carry no database in single-database mode: database restore skipped', [
+                    'tenant' => $record->tenant_id,
+                    'record_id' => $record->id,
+                ]);
+            } elseif ($db && isset($components['database'])) {
                 $this->announce($onPhase, 'restoring database');
 
                 $resolver = app(TenancyResolver::class);

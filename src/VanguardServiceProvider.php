@@ -89,6 +89,27 @@ class VanguardServiceProvider extends ServiceProvider
         $this->registerNotificationListeners();
         $this->validateDestinationDisks();
         $this->validateFilesystemPaths();
+        $this->validateDatabaseMode();
+    }
+
+    /**
+     * Warn at boot about an unknown vanguard.tenancy.database_mode.
+     *
+     * Only a warning here — a typo in a backup setting must not take the host
+     * application down — while every backup and restore that depends on the
+     * mode refuses to run on it (TenancyResolver::databaseMode()).
+     */
+    protected function validateDatabaseMode(): void
+    {
+        if (TenancyResolver::databaseModeIsDefault()) {
+            return;
+        }
+
+        try {
+            app(TenancyResolver::class)->databaseMode();
+        } catch (\RuntimeException $e) {
+            Log::warning($e->getMessage().' Tenant backups and restores will be refused until it is fixed.');
+        }
     }
 
     /**

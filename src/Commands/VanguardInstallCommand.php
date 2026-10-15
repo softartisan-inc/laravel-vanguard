@@ -171,6 +171,8 @@ class VanguardInstallCommand extends Command
         $this->line('     <comment># e.g. for PostgreSQL Row-Level Security — unset = application connection:</comment>');
         $this->line('     <comment>VANGUARD_BACKUP_CONNECTION=</comment>');
         $this->line('     <comment>VANGUARD_RESTORE_CONNECTION=</comment>');
+        $this->line('     <comment># One database shared by all tenants (multi = one per tenant, default):</comment>');
+        $this->line('     <comment>VANGUARD_TENANCY_DATABASE_MODE=multi</comment>');
         $this->line('     # Remote (S3):');
         $this->line('     <comment>VANGUARD_REMOTE_ENABLED=false</comment>');
         $this->line('     <comment>VANGUARD_REMOTE_DISK=s3</comment>');

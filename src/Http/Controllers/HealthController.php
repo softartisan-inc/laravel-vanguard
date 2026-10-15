@@ -258,7 +258,11 @@ class HealthController extends Controller
         }
 
         try {
-            if ($this->tenancy->isEnabled()) {
+            // In single-database mode no tenant connection exists: tenant
+            // backups are files, and the shared database is the central one.
+            $singleDatabase = ! TenancyResolver::databaseModeIsDefault() && $this->tenancy->sharesOneDatabase();
+
+            if ($this->tenancy->isEnabled() && ! $singleDatabase) {
                 $tenant = config('tenancy.database.tenant_connection_name', 'tenant');
 
                 if (is_string($tenant) && $tenant !== '') {
