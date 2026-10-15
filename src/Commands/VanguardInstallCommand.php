@@ -173,6 +173,11 @@ class VanguardInstallCommand extends Command
         $this->line('     <comment>VANGUARD_RESTORE_CONNECTION=</comment>');
         $this->line('     <comment># One database shared by all tenants (multi = one per tenant, default):</comment>');
         $this->line('     <comment>VANGUARD_TENANCY_DATABASE_MODE=multi</comment>');
+        $this->line('     <comment># Encrypt archives with age to public keys (generate the key pair OFF the server):</comment>');
+        $this->line('     <comment>VANGUARD_ENCRYPTION_ENABLED=false</comment>');
+        $this->line('     <comment>VANGUARD_ENCRYPTION_RECIPIENTS=age1...</comment>');
+        $this->line('     <comment>VANGUARD_ENCRYPTION_RECIPIENTS_FILE=</comment>');
+        $this->line('     <comment>VANGUARD_AGE_BINARY=</comment>');
         $this->line('     # Remote (S3):');
         $this->line('     <comment>VANGUARD_REMOTE_ENABLED=false</comment>');
         $this->line('     <comment>VANGUARD_REMOTE_DISK=s3</comment>');

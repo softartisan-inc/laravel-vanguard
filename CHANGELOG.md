@@ -26,6 +26,16 @@ the health payload and the dashboard behave exactly as in 2.6.1.
   tenant backup holds the tenant's files only, and no tenant connection is
   ever read. Tenant restores are files only in that mode. Restoring a single
   tenant's rows out of the shared database is not covered.
+- **Encrypted archives (age)** — `VANGUARD_ENCRYPTION_ENABLED` (runtime,
+  default `false`) encrypts every new archive with age to the public keys in
+  `VANGUARD_ENCRYPTION_RECIPIENTS` / `VANGUARD_ENCRYPTION_RECIPIENTS_FILE`,
+  stored as `{name}.tar.age`; `VANGUARD_AGE_BINARY` pins the binary. Restores
+  take the private key at restore time (`vanguard:restore --identity=<file>` or
+  `--identity-stdin`); it is never stored. Encrypted backups are refused by the
+  restore endpoint and the restore job (`400` naming the console command), and
+  marked *encrypted* on the dashboard. A missing binary or recipient fails the
+  backup before the dump, with no plaintext fallback. See *Encrypted archives*
+  in the README.
 - `vanguard:install` lists the new variables, and flags them as missing from a
   config published by an earlier version.
 

@@ -321,6 +321,98 @@ ALTER ROLE app_owner BYPASSRLS;
 
 ---
 
+## Encrypted archives (age)
+
+Off by default: archives are plain `.tar` bundles. When backups hold
+sensitive data, Vanguard can encrypt every archive with
+[age](https://age-encryption.org) **before it leaves the machine**, to one or
+more **public** keys. The private key never sits on the server: it is handed
+over at restore time, by the operator, and Vanguard never stores, copies or
+logs it.
+
+**1. Generate the key off the server**, on an admin workstation:
+
+```bash
+age-keygen -o backup-key.txt          # private key: keep it OFF the server
+age-keygen -y backup-key.txt          # prints the public key: age1...
+```
+
+Store `backup-key.txt` somewhere that survives the loss of the server (a
+password manager, an offline copy). **Lose it and the archives are
+unrecoverable.** Two recipients — two keys kept by two people — remove that
+single point of failure.
+
+**2. Install age on the server** (`apt install age`, `brew install age`, …)
+and give Vanguard the public key(s) — runtime variables:
+
+```dotenv
+VANGUARD_ENCRYPTION_ENABLED=true                     # default: false
+VANGUARD_ENCRYPTION_RECIPIENTS=age1...,age1...       # public keys, comma or newline separated
+# VANGUARD_ENCRYPTION_RECIPIENTS_FILE=/etc/backup/recipients.txt   # one per line (age -R)
+# VANGUARD_AGE_BINARY=/usr/bin/age                   # default: auto-detected
+```
+
+SSH public keys (`ssh-ed25519 …`, `ssh-rsa …`) are accepted as recipients too.
+
+**What changes once enabled**
+
+- Archives are stored as `{name}.tar.age` on every destination (local,
+  remote, FTP); the plaintext `.tar` is removed from the tmp directory as soon
+  as it is encrypted.
+- `checksum` stays the SHA-256 of **what is stored** (the encrypted file), so
+  `--no-verify` / `verify_checksum` work unchanged before decryption. The
+  record's `meta.encryption` keeps `format`, the number of `recipients` and
+  the `plaintext_checksum`, checked again after decryption.
+- A backup with no usable recipient, or without the age binary, **fails
+  before anything is dumped**. There is no fallback to a plaintext archive.
+  An unusable setup is also logged at boot, and the health payload gains an
+  `encryption` section (binary, recipient count — never the keys).
+- Download, prune and delete handle `.tar.age` files like any other archive.
+
+**Restoring** — console only:
+
+```bash
+php artisan vanguard:restore 42 --identity=/secure/backup-key.txt
+# or type / pipe the key instead of leaving a file on the server:
+php artisan vanguard:restore 42 --identity-stdin --restore-storage
+```
+
+- Without `--identity` / `--identity-stdin`, an encrypted backup is refused
+  before anything is downloaded.
+- `--identity-stdin` reads the key at a hidden prompt (or from stdin when
+  piped), writes it to a `0600` file under `vanguard.tmp_path` for age to
+  read, and erases it when the restore ends, whatever happened.
+- The dashboard and `POST /api/backups/{id}/restore` refuse encrypted backups
+  with a `400` naming the command to run: a private key must not travel over
+  HTTP nor sit in a queue payload. The dashboard marks them *encrypted* and
+  shows that command in the restore dialog.
+- A key protected by a passphrase makes age ask for it on a terminal: use it
+  with `--identity` from an interactive session.
+- The decrypted archive lives in the session tmp directory (`0700`) for the
+  duration of the restore. Keep `VANGUARD_TMP_PATH` off shared volumes.
+
+**Rotating keys**: add the new public key to the recipients, deploy, then
+remove the old one once its last archive has aged out of retention. Archives
+keep the recipients they were encrypted to.
+
+**Example — multi-tenant application on a single database isolated by
+Row-Level Security** (PostgreSQL 18), holding sensitive data:
+
+```dotenv
+VANGUARD_TENANCY_DATABASE_MODE=single
+VANGUARD_BACKUP_CONNECTION=pgsql_backup       # BYPASSRLS, read-only role
+VANGUARD_RESTORE_CONNECTION=pgsql_restore     # table owner, BYPASSRLS
+VANGUARD_ENCRYPTION_ENABLED=true
+VANGUARD_ENCRYPTION_RECIPIENTS=age1...primary,age1...second-custodian
+VANGUARD_REMOTE_ENABLED=true
+```
+
+The landlord backup dumps the whole shared database through the backup role,
+each tenant backup archives that tenant's files, and every archive is
+encrypted before it is uploaded.
+
+---
+
 ## Restoring a backup
 
 ```bash
@@ -329,6 +421,7 @@ php artisan vanguard:restore {id}
                   [--database=name]
                   [--no-verify] [--no-db]
                   [--restore-storage] [--wipe-storage]
+                  [--identity=file | --identity-stdin]
                   [--force]
 ```
 
@@ -340,6 +433,8 @@ php artisan vanguard:restore {id}
 | `--no-db` | Restore the filesystem only |
 | `--restore-storage` | Also restore the filesystem (opt-in; the database alone is restored by default) |
 | `--wipe-storage` | Replace instead of merge — see below. Requires `--restore-storage` |
+| `--identity=` | age private key file, for an encrypted archive — see *Encrypted archives* |
+| `--identity-stdin` | Read that key at a hidden prompt, or from stdin when piped |
 | `--force` | Skip every confirmation prompt |
 
 ### Rehearsing a restore (`--database=`)
