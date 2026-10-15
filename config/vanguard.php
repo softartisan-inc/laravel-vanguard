@@ -405,4 +405,43 @@ return [
         'recipients_file' => env('VANGUARD_ENCRYPTION_RECIPIENTS_FILE', null),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Cloudflare R2 (opt-in)
+    |--------------------------------------------------------------------------
+    | Every key is read at runtime. R2 is S3-compatible, so it is used through
+    | the existing 'remote' destination; this section only declares the disk.
+    |
+    | When 'bucket' and either 'account_id' or 'endpoint' are set, Vanguard
+    | declares an S3 disk named 'disk' (default 'vanguard-r2'): region auto,
+    | path-style endpoint https://<account_id>.r2.cloudflarestorage.com, no
+    | ACL/visibility, checksums only when required. A disk of that name already
+    | declared in config/filesystems.php is never overwritten, and no other
+    | disk (the 's3' one included) is ever touched. Left empty — the default —
+    | nothing is declared.
+    |
+    | Requires league/flysystem-aws-s3-v3. Then point the remote destination at it:
+    |   VANGUARD_REMOTE_ENABLED=true
+    |   VANGUARD_REMOTE_DISK=vanguard-r2
+    |
+    | 'jurisdiction' — null (default), 'eu' or 'fedramp': the bucket's data
+    |                  location jurisdiction, which has its own endpoint
+    |                  (https://<account_id>.eu.r2.cloudflarestorage.com).
+    | 'endpoint'     — explicit endpoint, overriding the one built from the
+    |                  account id (e.g. a local S3-compatible server in tests).
+    |
+    | Prefer declaring the disk yourself? Declare it in config/filesystems.php
+    | under the same name (it then wins), or build it from these settings in a
+    | service provider with SoftArtisan\Vanguard\Vanguard::r2DiskConfig().
+    */
+    'r2' => [
+        'disk' => env('VANGUARD_R2_DISK', 'vanguard-r2'),
+        'account_id' => env('VANGUARD_R2_ACCOUNT_ID'),
+        'access_key_id' => env('VANGUARD_R2_ACCESS_KEY_ID'),
+        'secret_access_key' => env('VANGUARD_R2_SECRET_ACCESS_KEY'),
+        'bucket' => env('VANGUARD_R2_BUCKET'),
+        'jurisdiction' => env('VANGUARD_R2_JURISDICTION', null),
+        'endpoint' => env('VANGUARD_R2_ENDPOINT', null),
+    ],
+
 ];

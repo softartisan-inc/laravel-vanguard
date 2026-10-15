@@ -47,6 +47,8 @@ class PublishedConfigDriftTest extends TestCase
             ->expectsOutputToContain('database.restore_connection')
             ->expectsOutputToContain('tenancy.database_mode')
             ->expectsOutputToContain('dump.pgsql_version_check')
+            ->expectsOutputToContain('r2.account_id')
+            ->expectsOutputToContain('r2.bucket')
             ->assertSuccessful();
     }
 

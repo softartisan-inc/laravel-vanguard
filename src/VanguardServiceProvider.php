@@ -46,6 +46,8 @@ class VanguardServiceProvider extends ServiceProvider
             class_alias(Vanguard::class, 'Vanguard');
         }
 
+        $this->registerR2Disk();
+
         // Stateless helpers — safe as singletons.
         $this->app->singleton(DatabaseDriver::class);
         $this->app->singleton(StorageDriver::class);
@@ -70,6 +72,23 @@ class VanguardServiceProvider extends ServiceProvider
             $app->make(BackupStorageManager::class),
             $app->make(TenancyResolver::class),
         ));
+    }
+
+    /**
+     * Declare the Cloudflare R2 disk when vanguard.r2 is configured (opt-in).
+     *
+     * Nothing happens with the shipped, empty settings. An unknown
+     * jurisdiction must not take the host application down: the disk is not
+     * declared, and the warning is logged once the application has booted
+     * (the remote destination then reports its missing disk as usual).
+     */
+    protected function registerR2Disk(): void
+    {
+        try {
+            Vanguard::registerR2Disk();
+        } catch (\InvalidArgumentException $e) {
+            $this->app->booted(fn () => Log::warning($e->getMessage().' The R2 disk was not declared.'));
+        }
     }
 
     /**

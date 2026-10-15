@@ -4,6 +4,7 @@ namespace SoftArtisan\Vanguard;
 
 use Closure;
 use Illuminate\Http\Request;
+use InvalidArgumentException;
 
 class Vanguard
 {
@@ -116,6 +117,124 @@ class Vanguard
     public static function centralConnection(): string
     {
         return config('tenancy.database.central_connection') ?: config('database.default');
+    }
+
+    /** Cloudflare R2 data location jurisdictions that have an endpoint of their own. */
+    public const R2_JURISDICTIONS = ['eu', 'fedramp'];
+
+    /**
+     * Whether vanguard.r2 holds enough to declare an R2 disk: a bucket, and
+     * an account id or an explicit endpoint. Empty by default.
+     */
+    public static function r2Configured(): bool
+    {
+        $filled = fn (string $key): bool => is_string($value = config("vanguard.r2.{$key}")) && trim($value) !== '';
+
+        return $filled('bucket') && ($filled('account_id') || $filled('endpoint'));
+    }
+
+    /**
+     * The name of the disk Vanguard declares for R2 (vanguard.r2.disk).
+     */
+    public static function r2DiskName(): string
+    {
+        $name = config('vanguard.r2.disk');
+
+        return is_string($name) && trim($name) !== '' ? trim($name) : 'vanguard-r2';
+    }
+
+    /**
+     * An S3 disk configuration aimed at Cloudflare R2, built from vanguard.r2.
+     *
+     * Region 'auto' and a path-style endpoint, as R2 expects. No ACL nor
+     * visibility: R2 does not implement object ACLs. Checksums are computed
+     * and validated only when an operation requires them — recent AWS SDKs
+     * (3.337+) add CRC checksum headers to every upload by default, which
+     * S3-compatible services do not all accept; older SDKs ignore both keys.
+     *
+     * Public so that an application can declare the disk itself, e.g. under
+     * another name from a service provider.
+     *
+     * @return array<string, mixed>
+     *
+     * @throws InvalidArgumentException On an unknown jurisdiction — guessing
+     *                                  would send the archives to another one
+     */
+    public static function r2DiskConfig(): array
+    {
+        return [
+            'driver' => 's3',
+            'key' => config('vanguard.r2.access_key_id'),
+            'secret' => config('vanguard.r2.secret_access_key'),
+            'region' => 'auto',
+            'bucket' => config('vanguard.r2.bucket'),
+            'endpoint' => static::r2Endpoint(),
+            'use_path_style_endpoint' => true,
+            'throw' => true,
+            'request_checksum_calculation' => 'when_required',
+            'response_checksum_validation' => 'when_required',
+        ];
+    }
+
+    /**
+     * The R2 endpoint: vanguard.r2.endpoint when set, otherwise
+     * https://<account_id>[.<jurisdiction>].r2.cloudflarestorage.com.
+     *
+     * @throws InvalidArgumentException On an unknown jurisdiction
+     */
+    public static function r2Endpoint(): ?string
+    {
+        $endpoint = config('vanguard.r2.endpoint');
+
+        if (is_string($endpoint) && trim($endpoint) !== '') {
+            return rtrim(trim($endpoint), '/');
+        }
+
+        $account = config('vanguard.r2.account_id');
+
+        if (! is_string($account) || trim($account) === '') {
+            return null;
+        }
+
+        $jurisdiction = config('vanguard.r2.jurisdiction');
+        $jurisdiction = is_string($jurisdiction) ? strtolower(trim($jurisdiction)) : '';
+
+        if ($jurisdiction !== '' && ! in_array($jurisdiction, self::R2_JURISDICTIONS, true)) {
+            throw new InvalidArgumentException(sprintf(
+                '[Vanguard] Unknown vanguard.r2.jurisdiction [%s] (VANGUARD_R2_JURISDICTION): expected %s, or nothing for the default.',
+                $jurisdiction,
+                implode(' or ', self::R2_JURISDICTIONS),
+            ));
+        }
+
+        $host = trim($account).($jurisdiction === '' ? '' : ".{$jurisdiction}");
+
+        return "https://{$host}.r2.cloudflarestorage.com";
+    }
+
+    /**
+     * Declare the R2 disk in filesystems.disks, when R2 is configured and no
+     * disk of that name exists. Called by the service provider at register.
+     *
+     * @return string|null The disk name declared, or null when nothing was
+     *
+     * @throws InvalidArgumentException On an unknown jurisdiction
+     */
+    public static function registerR2Disk(): ?string
+    {
+        if (! static::r2Configured()) {
+            return null;
+        }
+
+        $name = static::r2DiskName();
+
+        if (config("filesystems.disks.{$name}") !== null) {
+            return null;
+        }
+
+        config(["filesystems.disks.{$name}" => static::r2DiskConfig()]);
+
+        return $name;
     }
 
     /**
