@@ -15,6 +15,7 @@ use SoftArtisan\Vanguard\Models\BackupRecord;
 use SoftArtisan\Vanguard\Models\RestoreRecord;
 use SoftArtisan\Vanguard\Services\BackupManager;
 use SoftArtisan\Vanguard\Services\BackupStorageManager;
+use SoftArtisan\Vanguard\Services\Encryption\AgeEncryptor;
 use SoftArtisan\Vanguard\Services\TenancyResolver;
 use SoftArtisan\Vanguard\Vanguard;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -576,6 +577,16 @@ class BackupsApiController extends Controller
             ], 400);
         }
 
+        // An encrypted archive (opt-in) needs a private key to restore, and a
+        // private key has no business travelling over HTTP or sitting in a
+        // queue payload. Same rule as wipe_storage and database: console only.
+        if (AgeEncryptor::isEncryptedRecord($record)) {
+            return response()->json([
+                'error' => "Backup #{$record->id} is age-encrypted. A private key must not travel over HTTP: run "
+                    ."php artisan vanguard:restore {$record->id} --identity=<file> on the server.",
+            ], 400);
+        }
+
         $restore = RestoreRecord::on($central)->create([
             'backup_id' => $record->id,
             // Copied, not looked up: the history has to survive the deletion
@@ -646,7 +657,9 @@ class BackupsApiController extends Controller
             'started_at' => $r->started_at?->toIso8601String(),
             'completed_at' => $r->completed_at?->toIso8601String(),
             'created_at' => $r->created_at->toIso8601String(),
-        ];
+            // 'encrypted' is appended for an encrypted archive only, so a
+            // plaintext row is exactly what it was before encryption existed.
+        ] + (AgeEncryptor::isEncryptedRecord($r) ? ['encrypted' => true] : []);
     }
 
     /**

@@ -232,4 +232,35 @@ class RestoreEndpointTest extends TestCase
 
         $this->assertSame('api', RestoreRecord::findOrFail($response->json('restore_id'))->origin);
     }
+
+    #[Test]
+    public function an_encrypted_backup_is_refused_with_the_console_command_to_run(): void
+    {
+        $backup = $this->makeRecord([
+            'type' => 'landlord',
+            'file_path' => 'vanguard-backups/landlord_1.tar.age',
+            'meta' => ['encryption' => ['format' => 'age', 'recipients' => 1]],
+        ]);
+
+        $this->postJson("/vanguard/api/backups/{$backup->id}/restore", ['confirm' => 'landlord'])
+            ->assertStatus(400)
+            ->assertJsonFragment(['error' => "Backup #{$backup->id} is age-encrypted. A private key must not travel over HTTP: run "
+                ."php artisan vanguard:restore {$backup->id} --identity=<file> on the server."]);
+
+        $this->assertSame(0, RestoreRecord::count());
+        Queue::assertNothingPushed();
+    }
+
+    #[Test]
+    public function a_plaintext_backup_is_still_queued_with_encryption_enabled(): void
+    {
+        config(['vanguard.encryption.enabled' => true]);
+
+        $backup = $this->makeRecord(['type' => 'landlord']);
+
+        $this->postJson("/vanguard/api/backups/{$backup->id}/restore", ['confirm' => 'landlord'])
+            ->assertStatus(202);
+
+        Queue::assertPushed(RunRestoreJob::class);
+    }
 }

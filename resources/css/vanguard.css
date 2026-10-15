@@ -288,6 +288,9 @@ tr:hover td { background: rgba(255,255,255,0.02); }
 .row-toggle:hover { color: var(--text); }
 .row-toggle.open { transform: rotate(90deg); color: var(--accent); }
 .row-flag { color: var(--danger); font-size: 11px; margin-left: 6px; }
+.tag-encrypted { margin-left: 6px; background: rgba(77,240,164,0.08); color: var(--text); border: 1px solid var(--border); }
+.cli-command { display: flex; gap: 8px; align-items: center; }
+.cli-command code { flex: 1; overflow-x: auto; white-space: nowrap; }
 .row-detail td { background: rgba(0,0,0,0.25); padding: 14px 16px; }
 .detail-error {
   color: var(--danger); font-size: 11px; line-height: 1.6; white-space: pre-wrap;

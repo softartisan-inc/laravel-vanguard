@@ -25,6 +25,7 @@ use SoftArtisan\Vanguard\Services\BackupManager;
 use SoftArtisan\Vanguard\Services\BackupStorageManager;
 use SoftArtisan\Vanguard\Services\Drivers\DatabaseDriver;
 use SoftArtisan\Vanguard\Services\Drivers\StorageDriver;
+use SoftArtisan\Vanguard\Services\Encryption\AgeEncryptor;
 use SoftArtisan\Vanguard\Services\RestoreService;
 use SoftArtisan\Vanguard\Services\TenancyResolver;
 
@@ -90,6 +91,27 @@ class VanguardServiceProvider extends ServiceProvider
         $this->validateDestinationDisks();
         $this->validateFilesystemPaths();
         $this->validateDatabaseMode();
+        $this->validateEncryption();
+    }
+
+    /**
+     * Warn at boot about an encryption setup that cannot work.
+     *
+     * Only when vanguard.encryption is enabled, and only a warning — the host
+     * application must keep running — while every backup refuses to start on
+     * it (AgeEncryptor::assertReady()), never falling back to plaintext.
+     */
+    protected function validateEncryption(): void
+    {
+        if (! AgeEncryptor::configuredEnabled()) {
+            return;
+        }
+
+        try {
+            app(AgeEncryptor::class)->assertReady();
+        } catch (\RuntimeException $e) {
+            Log::warning($e->getMessage().' Backups will be refused until it is fixed.');
+        }
     }
 
     /**

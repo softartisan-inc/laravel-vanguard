@@ -11,6 +11,7 @@ use SoftArtisan\Vanguard\Console\VanguardScheduler;
 use SoftArtisan\Vanguard\Http\Concerns\ProbesQueueDepth;
 use SoftArtisan\Vanguard\Models\BackupRecord;
 use SoftArtisan\Vanguard\Services\Drivers\DatabaseDriver;
+use SoftArtisan\Vanguard\Services\Encryption\AgeEncryptor;
 use SoftArtisan\Vanguard\Services\TenancyResolver;
 use SoftArtisan\Vanguard\Vanguard;
 
@@ -55,7 +56,40 @@ class HealthController extends Controller
             $payload['connections'] = $dedicated;
         }
 
+        // Same rule: only when archive encryption is enabled.
+        if (AgeEncryptor::configuredEnabled()) {
+            $payload['encryption'] = $this->encryption();
+        }
+
         return response()->json($payload);
+    }
+
+    /**
+     * Whether new archives can be encrypted: the binary and how many
+     * recipients. Counted, never listed — and no private key is ever here.
+     *
+     * @return array<string, mixed>
+     */
+    protected function encryption(): array
+    {
+        $status = app(AgeEncryptor::class)->status();
+
+        $warning = match (true) {
+            $status['driver'] !== AgeEncryptor::FORMAT => "Unsupported encryption driver [{$status['driver']}]: backups will be refused.",
+            ! $status['binary_present'] => "The age binary [{$status['binary']}] is missing: backups will be refused.",
+            $status['error'] !== null => $status['error'],
+            $status['recipients'] === 0 => 'No recipient configured: backups will be refused.',
+            default => null,
+        };
+
+        return [
+            'driver' => $status['driver'],
+            'binary' => $status['binary'],
+            'binary_present' => $status['binary_present'],
+            'recipients' => $status['recipients'],
+            'ok' => $warning === null,
+            'warning' => $warning,
+        ];
     }
 
     /**
