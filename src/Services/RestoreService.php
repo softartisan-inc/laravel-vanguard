@@ -9,6 +9,7 @@ use SoftArtisan\Vanguard\Models\BackupRecord;
 use SoftArtisan\Vanguard\Models\RestoreRecord;
 use SoftArtisan\Vanguard\Services\Drivers\DatabaseDriver;
 use SoftArtisan\Vanguard\Services\Drivers\StorageDriver;
+use SoftArtisan\Vanguard\Services\Encryption\AgeEncryptor;
 
 class RestoreService
 {
@@ -39,9 +40,13 @@ class RestoreService
      *                          repointing the whole application. Only the database name moves; the
      *                          host, credentials and driver of the target connection are kept, and
      *                          nothing outside this call is reconfigured.
+     *                          - 'identity_file'   (string) — path of the age identity (private key) that
+     *                          decrypts an encrypted archive. Required for one, ignored otherwise. Read
+     *                          by age itself; never copied, logged or stored by this service.
      *                          - 'on_phase'        (callable) — receives (string $phase, array $context = []);
-     *                          announces progress through downloading, verifying, unpacking and the
-     *                          restore halves. Optional; a restore behaves exactly the same without it.
+     *                          announces progress through downloading, verifying, decrypting (encrypted
+     *                          archives only), unpacking and the restore halves. Optional; a restore
+     *                          behaves exactly the same without it.
      * @return bool true on success
      *
      * @throws RuntimeException
@@ -73,6 +78,20 @@ class RestoreService
 
         [$destination, $storedPath] = $this->resolveSource($record, $destination);
 
+        // An encrypted archive is refused before anything is downloaded when
+        // there is no key to open it with: the download of a large archive
+        // is the slow part, and it would be wasted.
+        $encrypted = AgeEncryptor::isEncryptedRecord($record);
+        $identityFile = $options['identity_file'] ?? null;
+
+        if ($encrypted && (! is_string($identityFile) || $identityFile === '')) {
+            throw new RuntimeException("Backup #{$record->id} is age-encrypted: pass --identity=<file>");
+        }
+
+        if ($encrypted && (! is_file($identityFile) || ! is_readable($identityFile))) {
+            throw new RuntimeException("Backup #{$record->id} is age-encrypted, and the identity file given cannot be read.");
+        }
+
         try {
             Log::info('[Vanguard] Starting restore', ['record_id' => $record->id]);
 
@@ -87,6 +106,11 @@ class RestoreService
                         "Checksum mismatch for backup #{$record->id}. The file may be corrupted."
                     );
                 }
+            }
+
+            if ($encrypted) {
+                $this->announce($onPhase, 'decrypting');
+                $bundlePath = $this->decrypt($record, $bundlePath, $identityFile, $verify);
             }
 
             $this->announce($onPhase, 'unpacking');
@@ -108,6 +132,38 @@ class RestoreService
         } finally {
             $this->store->cleanTmp();
         }
+    }
+
+    /**
+     * Decrypt a downloaded archive next to it, in the session tmp directory.
+     *
+     * The encrypted copy is removed once decrypted; the plaintext one goes
+     * with the rest of the session directory in cleanTmp(). When the backup
+     * recorded the checksum of its plaintext archive, what comes out of age
+     * must match it — unless verification was turned off for this restore.
+     *
+     * @return string Path of the decrypted .tar
+     *
+     * @throws RuntimeException
+     */
+    protected function decrypt(BackupRecord $record, string $encryptedPath, string $identityFile, bool $verify): string
+    {
+        $plainPath = str_ends_with($encryptedPath, AgeEncryptor::EXTENSION)
+            ? substr($encryptedPath, 0, -strlen(AgeEncryptor::EXTENSION))
+            : $encryptedPath.'.tar';
+
+        app(AgeEncryptor::class)->decrypt($encryptedPath, $identityFile, $plainPath);
+        @unlink($encryptedPath);
+
+        $expected = is_array($record->meta) ? ($record->meta['encryption']['plaintext_checksum'] ?? null) : null;
+
+        if ($verify && is_string($expected) && $expected !== '' && ! $this->store->verifyChecksum($plainPath, $expected)) {
+            throw new RuntimeException(
+                "Checksum mismatch for the decrypted archive of backup #{$record->id}. Refusing to restore it."
+            );
+        }
+
+        return $plainPath;
     }
 
     /**
