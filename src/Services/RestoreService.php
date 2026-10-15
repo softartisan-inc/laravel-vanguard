@@ -166,8 +166,17 @@ class RestoreService
         if ($db && isset($components['database'])) {
             $this->announce($onPhase, 'restoring database');
 
-            $driver = config('database.default');
-            $config = $this->redirect(config("database.connections.{$driver}"), $targetDatabase);
+            if (filled(config('vanguard.database.restore_connection'))) {
+                // vanguard.database.restore_connection: the driver is read
+                // from the connection itself.
+                $config = $this->redirect(app(TenancyResolver::class)->restoreDbConfig(), $targetDatabase);
+                $driver = $config['driver'];
+            } else {
+                // Unchanged when the setting is unset, including the
+                // connection name being what reaches the driver argument.
+                $driver = config('database.default');
+                $config = $this->redirect(config("database.connections.{$driver}"), $targetDatabase);
+            }
 
             $this->preservingCatalogue(function () use ($driver, $config, $components) {
                 $this->db->restore($driver, $config, $components['database']);

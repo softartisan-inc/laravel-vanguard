@@ -167,6 +167,10 @@ class VanguardInstallCommand extends Command
         $this->line('     <comment># Alerts — without an address a failing backup stays silent:</comment>');
         $this->line('     <comment>VANGUARD_NOTIFY_FAILURE=true</comment>');
         $this->line('     <comment>VANGUARD_NOTIFY_MAIL=ops@example.com</comment>');
+        $this->line('     <comment># Dedicated dump/restore connections (names from config/database.php),</comment>');
+        $this->line('     <comment># e.g. for PostgreSQL Row-Level Security — unset = application connection:</comment>');
+        $this->line('     <comment>VANGUARD_BACKUP_CONNECTION=</comment>');
+        $this->line('     <comment>VANGUARD_RESTORE_CONNECTION=</comment>');
         $this->line('     # Remote (S3):');
         $this->line('     <comment>VANGUARD_REMOTE_ENABLED=false</comment>');
         $this->line('     <comment>VANGUARD_REMOTE_DISK=s3</comment>');

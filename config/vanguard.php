@@ -43,6 +43,37 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Dedicated Backup / Restore Connections
+    |--------------------------------------------------------------------------
+    | Names of connections declared in config/database.php. Both are read at
+    | runtime. Leave them null to keep the default behaviour: the landlord dump
+    | runs through the central connection (tenancy.database.central_connection,
+    | else database.default) and the landlord restore writes through
+    | database.default.
+    |
+    | Set them when the application's own database role cannot see — or
+    | write — every row. On PostgreSQL with Row-Level Security, a dump taken
+    | as the application role holds only what that role is allowed to see:
+    |
+    |   'backup_connection'  — a role with BYPASSRLS, ideally read-only
+    |                          (ALTER ROLE ... SET default_transaction_read_only = on).
+    |   'restore_connection' — the owner of the tables, with BYPASSRLS: under
+    |                          FORCE ROW LEVEL SECURITY the owner is filtered too.
+    |
+    | A named connection that is not declared, or whose driver differs from
+    | the connection it replaces, fails the backup/restore loudly — there is
+    | no silent fallback to the application connection.
+    |
+    | Only the landlord (global) dump and restore move. In a multi-database
+    | tenancy setup, per-tenant dumps keep using the tenant connection.
+    */
+    'database' => [
+        'backup_connection' => env('VANGUARD_BACKUP_CONNECTION', null),
+        'restore_connection' => env('VANGUARD_RESTORE_CONNECTION', null),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Backup Sources
     |--------------------------------------------------------------------------
     | Define what gets backed up. Each source can be toggled independently.

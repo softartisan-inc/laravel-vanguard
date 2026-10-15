@@ -33,7 +33,7 @@ class HealthController extends Controller
      */
     public function show(): JsonResponse
     {
-        return response()->json([
+        $payload = [
             'destinations' => $this->destinations(),
             'database_clients' => $this->databaseClients(),
             'alerts' => $this->alerts(),
@@ -44,7 +44,41 @@ class HealthController extends Controller
                 'days' => (int) config('vanguard.retention.days', 30),
             ],
             'freshness' => $this->freshness(),
-        ]);
+        ];
+
+        // Only when one is configured, so the payload of an installation
+        // that uses neither is exactly what it was. Names only: the
+        // connection configuration carries credentials.
+        $dedicated = $this->dedicatedConnections();
+
+        if ($dedicated['backup'] !== null || $dedicated['restore'] !== null) {
+            $payload['connections'] = $dedicated;
+        }
+
+        return response()->json($payload);
+    }
+
+    /**
+     * The dedicated backup and restore connection names, null when unset.
+     *
+     * @return array{backup: string|null, restore: string|null}
+     */
+    protected function dedicatedConnections(): array
+    {
+        $name = function (string $key): ?string {
+            $value = config($key);
+
+            if (! is_string($value) || trim($value) === '') {
+                return null;
+            }
+
+            return trim($value);
+        };
+
+        return [
+            'backup' => $name('vanguard.database.backup_connection'),
+            'restore' => $name('vanguard.database.restore_connection'),
+        ];
     }
 
     // ─── Destinations ─────────────────────────────────────────────
@@ -213,6 +247,14 @@ class HealthController extends Controller
 
         if (is_string($central) && $central !== '') {
             $connections[] = $central;
+        }
+
+        // The connections the dump and the restore really go through when
+        // dedicated ones are configured (vanguard.database.*).
+        foreach ($this->dedicatedConnections() as $dedicated) {
+            if ($dedicated !== null) {
+                $connections[] = $dedicated;
+            }
         }
 
         try {

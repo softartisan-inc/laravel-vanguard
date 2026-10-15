@@ -53,7 +53,13 @@ class BackupManager
 
             // Central database
             if (config('vanguard.sources.landlord_database', true)) {
-                $dbConf = $this->tenancy->landlordDbConfig();
+                // vanguard.database.backup_connection, when set, names a
+                // dedicated connection. Unset, the call is the one it has
+                // always been — kept as is for resolvers extended or mocked
+                // by the host application.
+                $dbConf = filled(config('vanguard.database.backup_connection'))
+                    ? $this->tenancy->backupDbConfig()
+                    : $this->tenancy->landlordDbConfig();
                 $files['database'] = $this->db->dump(
                     driver: $dbConf['driver'],
                     config: $dbConf,
