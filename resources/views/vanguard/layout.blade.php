@@ -24,6 +24,7 @@
     data-csrf-token="{{ csrf_token() }}"
     data-realtime-driver="{{ config('vanguard.realtime.driver', 'polling') }}"
     data-poll-interval="{{ config('vanguard.realtime.interval', 5) }}"
+    data-database-mode="{{ \SoftArtisan\Vanguard\Services\TenancyResolver::databaseModeIsDefault() ? 'multi' : 'single' }}"
 ></div>
 
 <script src="{{ Vanguard::assetUrl('vanguard.js') }}"></script>

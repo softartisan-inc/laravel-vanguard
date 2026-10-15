@@ -94,6 +94,8 @@ const props = defineProps({
   csrfToken:      { type: String, required: true },
   realtimeDriver: { type: String, default: 'polling' },
   pollInterval:   { type: Number, default: 5 },
+  // 'single': one database shared by every tenant — a tenant backup is files only.
+  databaseMode:   { type: String, default: 'multi' },
 })
 
 // Provide config to all child composables via inject()
@@ -101,6 +103,7 @@ provide('basePath',       props.basePath)
 provide('csrfToken',      props.csrfToken)
 provide('realtimeDriver', props.realtimeDriver)
 provide('pollInterval',   props.pollInterval)
+provide('databaseMode',   props.databaseMode)
 
 // ── Navigation ────────────────────────────────────────────────
 const pages = {

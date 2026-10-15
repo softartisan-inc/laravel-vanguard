@@ -12,6 +12,7 @@ if (el) {
     csrfToken:     el.dataset.csrfToken,
     realtimeDriver: el.dataset.realtimeDriver  || 'sse',
     pollInterval:  parseInt(el.dataset.pollInterval || '5', 10),
+    databaseMode:  el.dataset.databaseMode || 'multi',
   })
 
   app.mount(el)

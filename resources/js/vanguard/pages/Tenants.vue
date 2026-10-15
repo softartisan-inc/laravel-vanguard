@@ -12,7 +12,7 @@
           {{ tenants.length }} Tenant{{ tenants.length !== 1 ? 's' : '' }}
         </div>
         <button class="btn btn-ghost" style="font-size:11px" @click="backupAll">
-          ▶ Backup All
+          ▶ Backup All<template v-if="filesOnly"> (files only)</template>
         </button>
       </div>
 
@@ -42,7 +42,7 @@
           <div v-else class="tenant-no-backup">No backups yet</div>
 
           <button class="btn btn-ghost btn-sm mt-2" @click="runTenantBackup(t.id)">
-            ▶ Run Backup
+            ▶ Run Backup<template v-if="filesOnly"> (files only)</template>
           </button>
         </div>
       </div>
@@ -51,13 +51,16 @@
 </template>
 
 <script setup>
-import { onMounted } from 'vue'
+import { onMounted, inject } from 'vue'
 import VBadge        from '../components/VBadge.vue'
 import { useBackups } from '../composables/useBackups.js'
 import { useToast }   from '../composables/useToast.js'
 
 const { tenants, loaded, fetchTenants, runBackup } = useBackups()
 const toast = useToast()
+
+// One database shared by every tenant: tenant backups carry files only.
+const filesOnly = inject('databaseMode', 'multi') === 'single'
 
 async function runTenantBackup(id) {
   try {
