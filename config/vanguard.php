@@ -310,12 +310,31 @@ return [
     | would fail outright. Add it here if your account has that privilege.
     |
     | Accepts a space-separated string or an array of options.
+    |
+    | 'pgsql_version_check' (opt-in, read at runtime) — pg_dump cannot dump a
+    | server of a newer major version (a pg_dump 16 against a PostgreSQL 18
+    | server fails), and it only says so once the dump has started. With
+    | this check, the major version of the resolved pg_dump binary is
+    | compared with the server's (SHOW server_version_num, on the connection
+    | the dump uses) before anything is dumped:
+    |
+    |   'off'    (default) no check: no extra process, no extra connection —
+    |            the behaviour of every version before this setting existed.
+    |   'warn'   a mismatch is logged and the dump runs anyway.
+    |   'strict' a mismatch refuses the backup before the dump starts, with a
+    |            message naming both versions and VANGUARD_PG_DUMP_BINARY.
+    |
+    | A version that cannot be read (binary missing, server unreachable) is
+    | logged and never blocks: unknown is not a proven mismatch. Point
+    | 'binaries.pg_dump' below at the right client, e.g.
+    | /usr/lib/postgresql/18/bin/pg_dump on Debian/Ubuntu.
     */
     'dump' => [
         'mysql_options' => env(
             'VANGUARD_MYSQL_DUMP_OPTIONS',
             '--single-transaction --quick --routines --triggers --no-tablespaces',
         ),
+        'pgsql_version_check' => env('VANGUARD_PG_VERSION_CHECK', 'off'),
     ],
 
     /*
@@ -328,12 +347,16 @@ return [
     |
     | Set explicitly when the binary is not in the PATH of your web/queue
     | process (common in Docker, shared hosting, or custom server setups).
+    | A configured path is always used as is, even when nothing is there
+    | (the health screen then reports it missing). Auto-detection does not
+    | look into /usr/lib/postgresql/<major>/bin: when several PostgreSQL
+    | clients are installed, pin the one matching your server here.
     |
     | Examples:
     |   VANGUARD_MYSQLDUMP_BINARY=/usr/bin/mysqldump
     |   VANGUARD_MYSQL_BINARY=/usr/bin/mysql
-    |   VANGUARD_PG_DUMP_BINARY=/usr/bin/pg_dump
-    |   VANGUARD_PSQL_BINARY=/usr/bin/psql
+    |   VANGUARD_PG_DUMP_BINARY=/usr/lib/postgresql/18/bin/pg_dump
+    |   VANGUARD_PSQL_BINARY=/usr/lib/postgresql/18/bin/psql
     |   VANGUARD_AGE_BINARY=/usr/bin/age
     */
     'binaries' => [
