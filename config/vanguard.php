@@ -334,12 +334,52 @@ return [
     |   VANGUARD_MYSQL_BINARY=/usr/bin/mysql
     |   VANGUARD_PG_DUMP_BINARY=/usr/bin/pg_dump
     |   VANGUARD_PSQL_BINARY=/usr/bin/psql
+    |   VANGUARD_AGE_BINARY=/usr/bin/age
     */
     'binaries' => [
         'mysqldump' => env('VANGUARD_MYSQLDUMP_BINARY', null),
         'mysql' => env('VANGUARD_MYSQL_BINARY', null),
         'pg_dump' => env('VANGUARD_PG_DUMP_BINARY', null),
         'psql' => env('VANGUARD_PSQL_BINARY', null),
+        // Only used when 'encryption' below is enabled.
+        'age' => env('VANGUARD_AGE_BINARY', null),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Archive Encryption (opt-in)
+    |--------------------------------------------------------------------------
+    | Every key is read at runtime. Disabled by default: archives are plain
+    | .tar bundles, exactly as before this section existed.
+    |
+    | Enabled, each archive is encrypted with age (https://age-encryption.org)
+    | to one or more PUBLIC keys before it leaves the machine, and stored as
+    | {name}.tar.age on every destination. The private key is never part of
+    | this configuration: generate it off the server (age-keygen on an admin
+    | workstation), keep it there, and put only the public key here. It is
+    | handed to `php artisan vanguard:restore {id} --identity=<file>` (or
+    | --identity-stdin) at restore time and never stored by Vanguard.
+    |
+    | 'enabled'         — true to encrypt every new archive.
+    | 'driver'          — 'age', the only supported value.
+    | 'recipients'      — age public keys (age1...) or SSH public keys
+    |                     (ssh-ed25519 ..., ssh-rsa ...), separated by commas
+    |                     or new lines; an array is accepted too. Several
+    |                     recipients = several keys able to decrypt (key
+    |                     rotation, a second custodian).
+    | 'recipients_file' — path to a file of recipients, one per line (age -R).
+    |
+    | When enabled, a backup with no usable recipient, or without the age
+    | binary (see 'binaries.age'), fails before anything is dumped. It never
+    | falls back to a plaintext archive. Encrypted backups cannot be restored
+    | from the dashboard or the HTTP API: a private key must not travel over
+    | HTTP or through the queue.
+    */
+    'encryption' => [
+        'enabled' => env('VANGUARD_ENCRYPTION_ENABLED', false),
+        'driver' => 'age',
+        'recipients' => env('VANGUARD_ENCRYPTION_RECIPIENTS', ''),
+        'recipients_file' => env('VANGUARD_ENCRYPTION_RECIPIENTS_FILE', null),
     ],
 
 ];
