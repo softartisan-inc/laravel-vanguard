@@ -15,7 +15,7 @@ class BackupDownloadTest extends TestCase
         parent::setUp();
 
         Vanguard::auth(fn ($request) => true);
-        Vanguard::restoreActor(fn () => 'ops@in-immo.app');
+        Vanguard::restoreActor(fn () => 'ops@example.com');
         Storage::fake('local');
     }
 
@@ -148,7 +148,7 @@ class BackupDownloadTest extends TestCase
 
         $logger->shouldHaveReceived('warning')->withArgs(
             fn (string $message, array $context) => $message === '[Vanguard] backup downloaded'
-                && $context['actor'] === 'ops@in-immo.app'
+                && $context['actor'] === 'ops@example.com'
                 && $context['target'] === '9001'
                 && $context['source'] === 'local',
         );
@@ -167,7 +167,7 @@ class BackupDownloadTest extends TestCase
 
         $logger->shouldHaveReceived('warning')->withArgs(
             fn (string $message, array $context) => $message === '[Vanguard] backup deleted'
-                && $context['actor'] === 'ops@in-immo.app'
+                && $context['actor'] === 'ops@example.com'
                 && $context['backup_id'] === $backup->id,
         );
     }

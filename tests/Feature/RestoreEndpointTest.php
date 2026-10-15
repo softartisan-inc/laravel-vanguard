@@ -19,7 +19,7 @@ class RestoreEndpointTest extends TestCase
         parent::setUp();
 
         Vanguard::auth(fn ($request) => true);
-        Vanguard::restoreActor(fn () => 'ops@in-immo.app');
+        Vanguard::restoreActor(fn () => 'ops@example.com');
         Queue::fake();
     }
 
@@ -50,7 +50,7 @@ class RestoreEndpointTest extends TestCase
         $this->assertSame('tenant', $restore->type);
         $this->assertSame('9001', $restore->tenant_id);
         $this->assertSame('remote', $restore->source);
-        $this->assertSame('ops@in-immo.app', $restore->requested_by);
+        $this->assertSame('ops@example.com', $restore->requested_by);
         $this->assertTrue($restore->restore_db);
         $this->assertFalse($restore->restore_storage);
         $this->assertTrue($restore->verify_checksum);
@@ -189,7 +189,7 @@ class RestoreEndpointTest extends TestCase
 
         $logger->shouldHaveReceived('warning')->withArgs(
             fn (string $message, array $context) => $message === '[Vanguard] restore requested'
-                && $context['actor'] === 'ops@in-immo.app'
+                && $context['actor'] === 'ops@example.com'
                 && $context['target'] === '9001'
                 && $context['backup_id'] === $backup->id,
         );
@@ -203,13 +203,13 @@ class RestoreEndpointTest extends TestCase
         // Held in an object so the resolver reads it at call time, the way a
         // real one reads whoever is authenticated on this request. An arrow
         // function would capture the value at registration and prove nothing.
-        $current = new \ArrayObject(['actor' => 'alice@in-immo.app']);
+        $current = new \ArrayObject(['actor' => 'alice@example.com']);
         Vanguard::restoreActor(fn () => $current['actor']);
 
         $this->postJson("/vanguard/api/backups/{$backup->id}/restore", ['confirm' => '9001'])
             ->assertStatus(202);
 
-        $current['actor'] = 'bob@in-immo.app';
+        $current['actor'] = 'bob@example.com';
 
         $this->postJson("/vanguard/api/backups/{$backup->id}/restore", ['confirm' => '9001'])
             ->assertStatus(202);
@@ -218,7 +218,7 @@ class RestoreEndpointTest extends TestCase
         // cached would attribute every later restore to whoever happened to
         // click first, which is worse than recording nobody.
         $this->assertSame(
-            ['alice@in-immo.app', 'bob@in-immo.app'],
+            ['alice@example.com', 'bob@example.com'],
             RestoreRecord::orderBy('id')->pluck('requested_by')->all(),
         );
     }

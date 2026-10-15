@@ -148,7 +148,7 @@ class BulkDeleteEndpointTest extends TestCase
     #[Test]
     public function it_records_who_erased_how_many(): void
     {
-        Vanguard::restoreActor(fn () => 'ops@in-immo.app');
+        Vanguard::restoreActor(fn () => 'ops@example.com');
 
         $lines = [];
         Log::listen(function ($message) use (&$lines) {
@@ -166,7 +166,7 @@ class BulkDeleteEndpointTest extends TestCase
 
         $this->assertNotNull($bulk, 'a bulk delete has to leave one line saying how many archives it erased');
         $this->assertSame('warning', $bulk[0]);
-        $this->assertSame('ops@in-immo.app', $bulk[2]['actor']);
+        $this->assertSame('ops@example.com', $bulk[2]['actor']);
         $this->assertSame([$record->id], $bulk[2]['deleted']);
 
         // And the per-archive line a single delete leaves is still left, once
