@@ -319,6 +319,70 @@ ALTER ROLE app_owner BYPASSRLS;
 - Vanguard's own tables (`vanguard_backups`, `vanguard_restores`) keep being
   read and written through the application connection.
 
+### PostgreSQL: matching `pg_dump` to the server
+
+`pg_dump` cannot dump a server of a **newer major version**: a `pg_dump 16`
+against a PostgreSQL 18 server fails with `server version mismatch`, and only
+once the backup has started. Two settings, both read at runtime:
+
+```dotenv
+# Which client binaries to run. A configured path is used as is (never
+# replaced by auto-detection); unset, /usr/bin, /usr/local/bin, … are searched.
+VANGUARD_PG_DUMP_BINARY=/usr/lib/postgresql/18/bin/pg_dump
+VANGUARD_PSQL_BINARY=/usr/lib/postgresql/18/bin/psql
+
+# Compare the pg_dump and server majors before every dump (default: off)
+VANGUARD_PG_VERSION_CHECK=strict   # off | warn | strict
+```
+
+| `VANGUARD_PG_VERSION_CHECK` | Before each PostgreSQL dump |
+|---|---|
+| `off` *(default)* | nothing: no `pg_dump --version`, no extra connection — the behaviour of every earlier version |
+| `warn` | an older `pg_dump` is logged; the dump runs anyway |
+| `strict` | an older `pg_dump` **refuses the backup before the dump starts**, naming both versions, the binary and `VANGUARD_PG_DUMP_BINARY` (and `/usr/lib/postgresql/<server>/bin/pg_dump` when it is installed) |
+
+- The server version (`SHOW server_version_num`) is read over the connection
+  the dump uses — the dedicated backup connection when one is configured.
+- A `pg_dump` of the same major or newer passes. A version that cannot be
+  read (binary missing, server unreachable) is logged and **never blocks**:
+  unknown is not a proven mismatch, and the dump reports its own error.
+- An unknown value is logged and treated as `warn`.
+- With the check on, the health screen adds `version`, `server_version`,
+  `version_check` and `version_compatible` to the `pgsql` row of
+  `database_clients`; a mismatch is `ok: false` in `strict`, `degraded` in
+  `warn`. With the check off, the row is unchanged.
+- Auto-detection never looks into `/usr/lib/postgresql/<major>/bin`: with
+  several clients installed (common on Debian/Ubuntu, which put only the
+  newest one on the `PATH` through wrappers), pin the binary.
+
+Getting the right client into the image:
+
+```dockerfile
+# Debian/Ubuntu base: the PGDG repository ships every major
+RUN apt-get update && apt-get install -y curl ca-certificates gnupg lsb-release \
+ && install -d /usr/share/postgresql-common/pgdg \
+ && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+      -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+ && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+      > /etc/apt/sources.list.d/pgdg.list \
+ && apt-get update && apt-get install -y postgresql-client-18
+
+# Alpine base
+RUN apk add --no-cache postgresql18-client
+```
+
+Example — a multi-tenant application with a single database isolated by
+Row-Level Security, on a PostgreSQL 18 server:
+
+```dotenv
+VANGUARD_TENANCY_DATABASE_MODE=single
+VANGUARD_BACKUP_CONNECTION=pgsql_backup      # BYPASSRLS, read-only role
+VANGUARD_RESTORE_CONNECTION=pgsql_restore    # table owner, BYPASSRLS
+VANGUARD_PG_DUMP_BINARY=/usr/lib/postgresql/18/bin/pg_dump
+VANGUARD_PSQL_BINARY=/usr/lib/postgresql/18/bin/psql
+VANGUARD_PG_VERSION_CHECK=strict
+```
+
 ---
 
 ## Encrypted archives (age)

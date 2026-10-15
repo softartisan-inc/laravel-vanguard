@@ -260,7 +260,62 @@ class HealthController extends Controller
             $rows[$name]['connections'][] = $connection;
         }
 
+        // Opt-in (vanguard.dump.pgsql_version_check): off, the rows are
+        // exactly what they were and the server is not asked anything.
+        $versionCheck = DatabaseDriver::pgVersionCheckMode();
+
+        if ($versionCheck !== DatabaseDriver::PG_VERSION_CHECK_OFF && isset($rows['pgsql'])) {
+            $rows['pgsql'] = $this->withPgVersions($driver, $rows['pgsql'], $versionCheck);
+        }
+
         return array_values($rows);
+    }
+
+    /**
+     * Add the pg_dump and server majors to the pgsql row, and say what a
+     * mismatch means in the configured mode: no backup at all in strict, a
+     * backup that pg_dump will most likely refuse in warn.
+     *
+     * The server asked is the one the dump goes through: the dedicated backup
+     * connection when it is configured, otherwise the central one.
+     *
+     * @param  array<string, mixed>  $row
+     * @return array<string, mixed>
+     */
+    protected function withPgVersions(DatabaseDriver $driver, array $row, string $mode): array
+    {
+        $backup = $this->dedicatedConnections()['backup'];
+        $connection = $backup !== null && in_array($backup, $row['connections'], true)
+            ? $backup
+            : $row['connections'][0];
+
+        try {
+            $report = $driver->pgVersionReport((array) config("database.connections.{$connection}"));
+        } catch (\Throwable $e) {
+            Log::warning('[Vanguard] Could not run the pg_dump version check for the health screen', [
+                'error' => $e->getMessage(),
+            ]);
+
+            return $row;
+        }
+
+        $row['version'] = $report['client'];
+        $row['server_version'] = $report['server'];
+        $row['version_check'] = $mode;
+        $row['version_compatible'] = $report['compatible'];
+
+        if ($report['compatible'] === false) {
+            $row['reason'] = trim(($row['reason'] ?? '').' '.$report['reason']);
+
+            if ($mode === DatabaseDriver::PG_VERSION_CHECK_STRICT) {
+                $row['ok'] = false;
+                $row['degraded'] = false;
+            } elseif ($row['ok']) {
+                $row['degraded'] = true;
+            }
+        }
+
+        return $row;
     }
 
     /**

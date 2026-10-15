@@ -3,6 +3,7 @@
 namespace SoftArtisan\Vanguard\Tests\Feature;
 
 use PHPUnit\Framework\Attributes\Test;
+use SoftArtisan\Vanguard\Services\Drivers\DatabaseDriver;
 use SoftArtisan\Vanguard\Services\TenancyResolver;
 use SoftArtisan\Vanguard\Tests\Support\FakeTenancyResolver;
 use SoftArtisan\Vanguard\Tests\TestCase;
@@ -233,6 +234,130 @@ class HealthDatabaseClientsTest extends TestCase
         $this->assertNotNull($row);
         $this->assertSame('gzip', $row['dump']['client']);
         $this->assertSame('gunzip', $row['restore']['client']);
+    }
+
+    /**
+     * A pgsql central connection, a pg_dump reporting $clientMajor, a psql,
+     * and a driver whose server answers $serverMajor — no server needed.
+     */
+    private function usePgsqlWithVersions(int $clientMajor, ?int $serverMajor): void
+    {
+        $pgDump = $this->tmpDir.'/pg_dump';
+        file_put_contents($pgDump, "#!/bin/sh\necho 'pg_dump (PostgreSQL) {$clientMajor}.2'\n");
+        chmod($pgDump, 0755);
+
+        config([
+            'database.connections.vanguard_health_pgsql' => [
+                'driver' => 'pgsql',
+                'host' => '127.0.0.1',
+                'database' => 'shop',
+                'username' => 'postgres',
+            ],
+            'tenancy.database.central_connection' => 'vanguard_health_pgsql',
+            'vanguard.binaries.pg_dump' => $pgDump,
+            'vanguard.binaries.psql' => $this->presentBinary('psql'),
+        ]);
+
+        $this->app->instance(DatabaseDriver::class, new class($serverMajor) extends DatabaseDriver
+        {
+            public function __construct(private ?int $serverMajor) {}
+
+            protected function pgServerMajorVersion(array $c): ?int
+            {
+                return $this->serverMajor;
+            }
+        });
+    }
+
+    #[Test]
+    public function postgres_versions_are_not_reported_while_the_check_is_off(): void
+    {
+        // Default: the payload is exactly what it was, and nothing asks the server.
+        $this->usePgsqlWithVersions(16, 18);
+
+        $row = $this->driverRow('pgsql');
+
+        $this->assertArrayNotHasKey('version', $row);
+        $this->assertArrayNotHasKey('server_version', $row);
+        $this->assertArrayNotHasKey('version_check', $row);
+        $this->assertTrue($row['ok']);
+        $this->assertNull($row['reason']);
+    }
+
+    #[Test]
+    public function strict_reports_an_older_pg_dump_as_not_working(): void
+    {
+        config(['vanguard.dump.pgsql_version_check' => 'strict']);
+        $this->usePgsqlWithVersions(16, 18);
+
+        $row = $this->driverRow('pgsql');
+
+        $this->assertSame(16, $row['version']);
+        $this->assertSame(18, $row['server_version']);
+        $this->assertSame('strict', $row['version_check']);
+        $this->assertFalse($row['version_compatible']);
+        $this->assertFalse($row['ok'], 'strict refuses every backup on this host');
+        $this->assertStringContainsString('VANGUARD_PG_DUMP_BINARY', $row['reason']);
+    }
+
+    #[Test]
+    public function warn_reports_an_older_pg_dump_as_degraded(): void
+    {
+        config(['vanguard.dump.pgsql_version_check' => 'warn']);
+        $this->usePgsqlWithVersions(16, 18);
+
+        $row = $this->driverRow('pgsql');
+
+        $this->assertTrue($row['ok']);
+        $this->assertTrue($row['degraded']);
+        $this->assertStringContainsString('VANGUARD_PG_DUMP_BINARY', $row['reason']);
+    }
+
+    #[Test]
+    public function a_matching_pg_dump_is_reported_with_both_versions(): void
+    {
+        config(['vanguard.dump.pgsql_version_check' => 'strict']);
+        $this->usePgsqlWithVersions(18, 18);
+
+        $row = $this->driverRow('pgsql');
+
+        $this->assertSame(18, $row['version']);
+        $this->assertSame(18, $row['server_version']);
+        $this->assertTrue($row['version_compatible']);
+        $this->assertTrue($row['ok']);
+        $this->assertFalse($row['degraded']);
+        $this->assertNull($row['reason']);
+    }
+
+    #[Test]
+    public function the_version_is_read_on_the_dedicated_backup_connection(): void
+    {
+        config(['vanguard.dump.pgsql_version_check' => 'warn']);
+        $this->usePgsqlWithVersions(18, 18);
+
+        config(['database.connections.vanguard_health_pg_backup' => [
+            'driver' => 'pgsql',
+            'host' => '127.0.0.1',
+            'database' => 'shop',
+            'username' => 'backup_role',
+        ], 'vanguard.database.backup_connection' => 'vanguard_health_pg_backup']);
+
+        $asked = [];
+        $this->app->instance(DatabaseDriver::class, new class($asked) extends DatabaseDriver
+        {
+            public function __construct(private array &$asked) {}
+
+            protected function pgServerMajorVersion(array $c): ?int
+            {
+                $this->asked[] = $c['username'];
+
+                return 18;
+            }
+        });
+
+        $this->driverRow('pgsql');
+
+        $this->assertSame(['backup_role'], $asked);
     }
 
     #[Test]
