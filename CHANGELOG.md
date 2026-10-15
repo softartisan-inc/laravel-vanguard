@@ -7,10 +7,15 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
-## [Unreleased]
+## [2.7.0] — 2026-10-15
+
+### Every new mode is opt-in; the defaults are unchanged
 
 Everything below is **opt-in**: with the shipped defaults, backups, restores,
-the health payload and the dashboard behave exactly as in 2.6.1.
+the health payload and the dashboard behave exactly as in 2.6.1. No migration,
+no config republish: an application that sets none of the new variables gets
+the same archives, the same extensions (`.tar`), the same checksums and the
+same API payloads as before. Tests cover the default of each new setting.
 
 ### Added
 
@@ -38,8 +43,29 @@ the health payload and the dashboard behave exactly as in 2.6.1.
   marked *encrypted* on the dashboard. A missing binary or recipient fails the
   backup before the dump, with no plaintext fallback. See *Encrypted archives*
   in the README.
+- **`pg_dump` / server major check** — `VANGUARD_PG_VERSION_CHECK` (runtime,
+  default `off`): `warn` logs an older `pg_dump` than the server, `strict`
+  refuses the backup before the dump starts, naming both versions and the
+  binary to pin (`VANGUARD_PG_DUMP_BINARY`, `VANGUARD_PSQL_BINARY`). An
+  unreadable version never blocks. With the check on, the health screen
+  reports both majors. See *PostgreSQL: matching `pg_dump` to the server*.
+- **Cloudflare R2** — with `VANGUARD_R2_BUCKET` and `VANGUARD_R2_ACCOUNT_ID`
+  (or `VANGUARD_R2_ENDPOINT`), Vanguard declares an S3-compatible disk
+  (`vanguard-r2` by default: region `auto`, path-style endpoint, optional EU
+  jurisdiction) to use as the remote destination. A disk of that name already
+  declared by the application wins, and no other disk (`s3` included) is
+  touched. `Vanguard::r2DiskConfig()` builds it for a disk of your own. The
+  health screen and `vanguard:install` name the missing
+  `league/flysystem-aws-s3-v3` adapter. See *Cloudflare R2*.
 - `vanguard:install` lists the new variables, and flags them as missing from a
   config published by an earlier version.
+
+### Documentation
+
+- **Authentication** — the default dashboard check only requires a logged-in
+  user; authorization stays in the application (`Vanguard::auth()`), with a
+  Gate example and guidance for serving the dashboard to platform operators
+  only in a multi-tenant application.
 
 ---
 

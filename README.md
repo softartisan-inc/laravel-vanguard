@@ -11,8 +11,16 @@ A multi-tenant backup dashboard for Laravel, built with Vue 3 + Vite and real-ti
 | PHP | `^8.3` (CI runs 8.3, 8.4, 8.5) |
 | Laravel | `^12.0` only |
 | System binaries | `tar`, `gzip` (GNU tar); `mysqldump`/`mysql` or `pg_dump`/`psql` for database backups |
+| Optional | `age` for [encrypted archives](#encrypted-archives-age); `league/flysystem-aws-s3-v3` for an S3 or [Cloudflare R2](#cloudflare-r2) remote |
 
 PHP 8.1/8.2 and Laravel 10/11 were dropped in 2.0 — see [Upgrading from 1.x to 2.0](#upgrading-from-1x-to-20).
+
+Since 2.7, a few modes are available on demand — all **off by default**, so an
+existing installation behaves exactly as before until it sets them:
+[single database under Row-Level Security](#single-database-under-row-level-security),
+[dedicated backup/restore connections](#dedicated-backuprestore-connections-postgresql-rls),
+[`pg_dump` version check](#postgresql-matching-pg_dump-to-the-server),
+[encrypted archives](#encrypted-archives-age) and [Cloudflare R2](#cloudflare-r2).
 
 Without the `mysqldump` binary, MySQL dumps fall back to a pure-PDO implementation (slower, but no binary needed). Binary locations can be pinned in `vanguard.binaries` when they are not in the PATH of your web/queue process.
 
@@ -244,7 +252,7 @@ fact as `api`.
 ],
 ```
 
-### Single-database tenancy (shared DB + RLS)
+### Single database under Row-Level Security
 
 By default Vanguard expects **one database per tenant** (stancl/tenancy's
 `DatabaseTenancyBootstrapper`): a tenant backup dumps the tenant's own
