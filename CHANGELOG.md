@@ -7,6 +7,30 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
+## [Unreleased]
+
+Everything below is **opt-in**: with the shipped defaults, backups, restores,
+the health payload and the dashboard behave exactly as in 2.6.1.
+
+### Added
+
+- **Dedicated backup/restore connections** — `VANGUARD_BACKUP_CONNECTION` and
+  `VANGUARD_RESTORE_CONNECTION` (runtime, default unset) name connections of
+  their own for the landlord dump and restore: on PostgreSQL with Row-Level
+  Security, a dump taken as the application role only holds what that role can
+  see. An undeclared connection or a driver mismatch fails loudly instead of
+  falling back. See *Dedicated backup/restore connections* in the README.
+- **Single-database tenancy** — `VANGUARD_TENANCY_DATABASE_MODE=single`
+  (runtime, default `multi`) for applications that keep every tenant in one
+  shared database: the database is backed up once by the landlord backup, a
+  tenant backup holds the tenant's files only, and no tenant connection is
+  ever read. Tenant restores are files only in that mode. Restoring a single
+  tenant's rows out of the shared database is not covered.
+- `vanguard:install` lists the new variables, and flags them as missing from a
+  config published by an earlier version.
+
+---
+
 ## [2.6.1] — 2026-09-02
 
 ### A backup no longer dies because Horizon rebalanced

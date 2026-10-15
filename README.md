@@ -216,6 +216,109 @@ fact as `api`.
 ],
 ```
 
+### Single-database tenancy (shared DB + RLS)
+
+By default Vanguard expects **one database per tenant** (stancl/tenancy's
+`DatabaseTenancyBootstrapper`): a tenant backup dumps the tenant's own
+database. A multi-tenant application can instead keep **one database for
+every tenant**, rows isolated by PostgreSQL Row-Level Security, with only the
+storage split per tenant (`FilesystemTenancyBootstrapper`). There is then no
+tenant connection to dump, and every tenant backup used to fail on it.
+
+Opt in with a runtime variable:
+
+```dotenv
+VANGUARD_TENANCY_DATABASE_MODE=single   # default: multi
+```
+
+| | `multi` (default) | `single` |
+|---|---|---|
+| Landlord backup | central DB + files | **the shared DB** + files |
+| Tenant backup | tenant DB (+ files when asked) | **tenant files only** (`storage_path()` of the tenant) |
+| Tenant connection read | yes | never |
+| `--no-filesystem` on a tenant | DB only | **refused**: nothing to back up |
+| Tenant restore | tenant DB (+ files) | **files only**; `--restore-storage` required, `--database` refused |
+
+- Schedule both: `schedule.landlord` (the shared database) and
+  `schedule.tenants` (each tenant's files). Both are on by default.
+- Tenant records carry `sources = ["filesystem"]` and
+  `meta.database_mode = "single"`; the dashboard labels tenant backups
+  *files only*.
+- A database restore asked for on a tenant backup is announced
+  (`skipping database`) and logged, never silently skipped.
+- **Limit:** restoring the rows of a single tenant out of the shared database
+  is not covered — the shared database comes back as a whole, from a landlord
+  backup.
+- Any other value than `multi` / `single` is logged at boot and refused by
+  tenant backups and restores.
+
+Pair it with a dedicated backup connection (below): on a database under
+Row-Level Security, the application role cannot dump it.
+
+### Dedicated backup/restore connections (PostgreSQL RLS)
+
+Under Row-Level Security the application's role only sees the rows of the
+current tenant. A `pg_dump` taken as that role is a dump of **what it can
+see**, and under `FORCE ROW LEVEL SECURITY` even the table owner is filtered
+on restore. Name connections of their own for the dump and for the restore
+(runtime variables, connection names from `config/database.php`):
+
+```dotenv
+VANGUARD_BACKUP_CONNECTION=pgsql_backup     # default: unset
+VANGUARD_RESTORE_CONNECTION=pgsql_restore   # default: unset
+```
+
+```php
+// config/database.php — same server and database as 'pgsql', other roles
+'pgsql_backup' => [
+    'driver' => 'pgsql',
+    'host' => env('DB_HOST', '127.0.0.1'),
+    'port' => env('DB_PORT', '5432'),
+    'database' => env('DB_DATABASE'),
+    'username' => env('DB_BACKUP_USERNAME'),
+    'password' => env('DB_BACKUP_PASSWORD'),
+    'charset' => 'utf8',
+    'search_path' => 'public',
+    'sslmode' => env('DB_SSLMODE', 'prefer'),
+],
+'pgsql_restore' => [
+    // same keys, with DB_RESTORE_USERNAME / DB_RESTORE_PASSWORD
+],
+```
+
+The roles, on the PostgreSQL side:
+
+```sql
+-- Dump: sees every row, cannot write anything
+CREATE ROLE app_backup LOGIN PASSWORD '...' BYPASSRLS;
+ALTER ROLE app_backup SET default_transaction_read_only = on;
+GRANT CONNECT ON DATABASE app TO app_backup;
+GRANT USAGE ON SCHEMA public TO app_backup;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO app_backup;
+GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO app_backup;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO app_backup;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON SEQUENCES TO app_backup;
+
+-- Restore: owns the tables, so it can recreate them, and bypasses RLS
+ALTER ROLE app_owner BYPASSRLS;
+```
+
+- **Unset, nothing changes**: the dump uses the central connection
+  (`tenancy.database.central_connection`, else `database.default`) and the
+  landlord restore writes through `database.default`, exactly as before.
+- A connection that is not declared, or whose driver differs from the one it
+  replaces, **fails the backup or restore** before anything is dumped or
+  written — there is no silent fallback to the application role, which is the
+  very failure being avoided.
+- `--database=` (restore rehearsal) still applies, on top of the restore
+  connection: only the database name moves.
+- Only the landlord/global dump and restore use them. In `multi` mode,
+  per-tenant dumps keep using the tenant connection.
+- The health screen checks the database clients of these connections and
+  names them under `connections` (names only, never credentials).
+- Vanguard's own tables (`vanguard_backups`, `vanguard_restores`) keep being
+  read and written through the application connection.
+
 ---
 
 ## Restoring a backup
