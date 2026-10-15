@@ -178,12 +178,40 @@ turns a working backup into a failed one.
 
 ## Authentication
 
+Authorization stays in the application: Vanguard ships no roles and no
+policy of its own. **The default only checks that someone is logged in**
+(`$request->user() !== null`) — on an application where every customer has
+an account, every customer would reach the dashboard, its downloads and its
+restore button. Always set the callback:
+
 ```php
 // AppServiceProvider::boot()
 use SoftArtisan\Vanguard\Facades\Vanguard;
 
 Vanguard::auth(fn (Request $r) => $r->user()?->isAdmin());
 ```
+
+With a gate, so the rule lives beside the application's other abilities:
+
+```php
+// AppServiceProvider::boot()
+use Illuminate\Support\Facades\Gate;
+use SoftArtisan\Vanguard\Facades\Vanguard;
+
+Gate::define('viewVanguard', fn ($user) => $user->hasRole('platform-admin'));
+
+Vanguard::auth(fn (Request $r) => $r->user() !== null && Gate::forUser($r->user())->allows('viewVanguard'));
+```
+
+- The callback guards every Vanguard route — the dashboard, the JSON API
+  (run, restore, delete, download), the health screen and the SSE stream —
+  except the two static assets (`vanguard.js`, `vanguard.css`).
+- It runs after the `vanguard.middleware` stack (`['web']` by default). If the
+  dashboard authenticates on another guard, add its middleware there
+  (e.g. `['web', 'auth:ops']`) and read `$r->user('ops')` in the callback.
+- In a multi-tenant application, serve the dashboard from the central domain
+  only (`VANGUARD_DOMAIN`) and grant it to platform operators, never to a
+  tenant's own administrators: it lists and restores every tenant's backups.
 
 ### Who is recorded as having asked for a restore
 
