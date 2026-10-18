@@ -25,9 +25,9 @@ class VanguardActorTest extends TestCase
     {
         // The package cannot presume the host application's user model, so the
         // application says who is acting.
-        Vanguard::restoreActor(fn () => 'ops:henoc');
+        Vanguard::restoreActor(fn () => 'ops:alice');
 
-        $this->assertSame('ops:henoc', Vanguard::actor());
+        $this->assertSame('ops:alice', Vanguard::actor());
     }
 
     #[Test]

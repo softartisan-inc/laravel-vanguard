@@ -21,7 +21,7 @@ class RestoreLifecycleTest extends TestCase
     public function a_queued_restore_carries_its_target_and_its_actor(): void
     {
         Queue::fake();
-        Vanguard::restoreActor(fn () => 'ops:henoc');
+        Vanguard::restoreActor(fn () => 'ops:alice');
 
         $backup = $this->makeRecord([
             'type' => 'tenant',
@@ -48,7 +48,7 @@ class RestoreLifecycleTest extends TestCase
 
         Queue::assertPushed(RunRestoreJob::class, fn ($job) => $job->restoreId === $restore->id);
 
-        $this->assertSame('ops:henoc', $restore->requested_by);
+        $this->assertSame('ops:alice', $restore->requested_by);
         $this->assertSame('9001', $restore->tenant_id);
         $this->assertSame('remote', $restore->source);
     }
