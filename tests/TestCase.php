@@ -8,15 +8,57 @@ use SoftArtisan\Vanguard\Models\BackupRecord;
 use SoftArtisan\Vanguard\Models\RestoreRecord;
 use SoftArtisan\Vanguard\VanguardServiceProvider;
 
+use function Orchestra\Testbench\default_skeleton_path;
+
 abstract class TestCase extends Orchestra
 {
     use RefreshDatabase;
 
     protected function setUp(): void
     {
+        // Before the application boots: a config/vanguard.php left in the
+        // Testbench skeleton would be loaded over the package defaults and
+        // hide a change to them.
+        self::removePublishedPackageFiles();
+
         parent::setUp();
 
         $this->setUpDatabase();
+    }
+
+    protected function tearDown(): void
+    {
+        try {
+            parent::tearDown();
+        } finally {
+            self::removePublishedPackageFiles();
+        }
+    }
+
+    /**
+     * Remove what `vanguard:install` (vendor:publish) writes into the Testbench
+     * skeleton: the config file and the package's own migrations, by name.
+     * Nothing else in the skeleton is touched.
+     */
+    protected static function removePublishedPackageFiles(): void
+    {
+        $skeleton = default_skeleton_path();
+
+        if ($skeleton === false) {
+            return;
+        }
+
+        $published = [$skeleton.'/config/vanguard.php'];
+
+        foreach (glob(__DIR__.'/../database/migrations/*.php') ?: [] as $migration) {
+            $published[] = $skeleton.'/database/migrations/'.basename($migration);
+        }
+
+        foreach ($published as $file) {
+            if (is_file($file)) {
+                unlink($file);
+            }
+        }
     }
 
     protected function getPackageProviders($app): array
