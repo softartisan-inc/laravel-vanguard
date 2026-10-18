@@ -5,6 +5,7 @@ namespace SoftArtisan\Vanguard\Tests\Feature;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Storage;
 use Mockery;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Test;
 use RuntimeException;
 use SoftArtisan\Vanguard\Models\BackupRecord;
@@ -194,6 +195,105 @@ class EncryptedBackupTest extends TestCase
         } finally {
             $this->assertSame([], Storage::disk('local')->allFiles());
         }
+    }
+
+    /**
+     * An encryption setup that cannot work: no age binary, or no recipient.
+     *
+     * @return array<string, array{0: array<string, mixed>, 1: string}>
+     */
+    public static function unusableEncryption(): array
+    {
+        return [
+            'age binary missing' => [['vanguard.binaries.age' => '/nonexistent/vanguard-no-such-age'], 'age binary'],
+            'no recipient' => [['vanguard.encryption.recipients' => ''], 'no recipient'],
+        ];
+    }
+
+    /**
+     * A manager whose every collaborator refuses to be used: the refusal has
+     * to come before anything is dumped, archived, bundled or recorded.
+     */
+    private function managerThatMustNotRun(TenancyResolver $tenancy): BackupManager
+    {
+        $db = Mockery::mock(DatabaseDriver::class);
+        $db->shouldNotReceive('dump');
+
+        $storage = Mockery::mock(StorageDriver::class);
+        $storage->shouldNotReceive('archive');
+
+        $store = Mockery::mock(BackupStorageManager::class);
+        $store->shouldNotReceive('tmpPath', 'bundle');
+        $store->shouldReceive('cleanTmp')->never();
+
+        return new BackupManager($db, $storage, $store, $tenancy);
+    }
+
+    /**
+     * @param  array<string, mixed>  $broken
+     */
+    private function assertRefusedBeforeAnything(callable $backup, array $broken, string $message): void
+    {
+        $this->enableEncryption();
+        config($broken);
+
+        try {
+            $backup();
+            $this->fail('A backup that cannot be encrypted was attempted.');
+        } catch (RuntimeException $e) {
+            $this->assertStringContainsString($message, $e->getMessage());
+            $this->assertStringContainsString('Refusing to write an unencrypted archive', $e->getMessage());
+        }
+
+        foreach (['local', 's3', 'ftp'] as $disk) {
+            $this->assertSame([], Storage::disk($disk)->allFiles(), "nothing stored on {$disk}");
+        }
+        $this->assertSame([], glob($this->tmpDir.'/tmp/*') ?: [], 'nothing written to the tmp directory');
+        $this->assertSame(0, BackupRecord::count(), 'refused before any record is written');
+    }
+
+    #[Test]
+    #[DataProvider('unusableEncryption')]
+    public function a_single_database_tenant_backup_is_refused_before_its_files_are_archived(array $broken, string $message): void
+    {
+        config([
+            'vanguard.tenancy.database_mode' => 'single',
+            'vanguard.sources.filesystem' => true,
+        ]);
+
+        $tenancy = Mockery::mock(TenancyResolver::class);
+        $tenancy->shouldReceive('sharesOneDatabase')->andReturn(true);
+        $tenancy->shouldNotReceive('runForTenant', 'tenantDbConfig');
+
+        $tenant = new class
+        {
+            public function getTenantKey(): string
+            {
+                return 'tenant-a';
+            }
+        };
+
+        $this->assertRefusedBeforeAnything(
+            fn () => $this->managerThatMustNotRun($tenancy)->backupTenant($tenant),
+            $broken,
+            $message,
+        );
+    }
+
+    #[Test]
+    #[DataProvider('unusableEncryption')]
+    public function a_filesystem_backup_is_refused_before_anything_is_archived(array $broken, string $message): void
+    {
+        config(['vanguard.sources.filesystem' => true]);
+
+        $tenancy = Mockery::mock(TenancyResolver::class);
+        $tenancy->shouldNotReceive('landlordDbConfig', 'runForTenant');
+
+        $this->assertRefusedBeforeAnything(
+            fn () => $this->managerThatMustNotRun($tenancy)->backupFilesystem(),
+            $broken,
+            $message,
+        );
     }
 
     #[Test]
