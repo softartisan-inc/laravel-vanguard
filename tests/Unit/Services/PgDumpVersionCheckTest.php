@@ -3,6 +3,7 @@
 namespace SoftArtisan\Vanguard\Tests\Unit\Services;
 
 use Illuminate\Support\Facades\Log;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Test;
 use RuntimeException;
 use SoftArtisan\Vanguard\Services\Drivers\DatabaseDriver;
@@ -169,6 +170,58 @@ class PgDumpVersionCheckTest extends TestCase
         $this->driverForServer(18)->dump('pgsql', $this->pgConfig(), $this->tmpDir.'/same.sql.gz');
 
         $this->assertSame(['version', 'dump'], $this->calls());
+    }
+
+    /**
+     * The boundary of the comparison, one major either side of the server.
+     *
+     * @return array<string, array{0: int, 1: int, 2: bool}>
+     */
+    public static function majorsAroundTheServer(): array
+    {
+        return [
+            'one major older' => [17, 18, false],
+            'same major' => [18, 18, true],
+            'one major newer' => [19, 18, true],
+        ];
+    }
+
+    #[Test]
+    #[DataProvider('majorsAroundTheServer')]
+    public function only_an_older_pg_dump_is_a_mismatch_even_by_one_major(int $client, int $server, bool $compatible): void
+    {
+        $this->fakePgDump("pg_dump (PostgreSQL) {$client}.2");
+
+        $report = $this->driverForServer($server)->pgVersionReport($this->pgConfig());
+
+        $this->assertSame($client, $report['client']);
+        $this->assertSame($server, $report['server']);
+        $this->assertSame($compatible, $report['compatible']);
+        $compatible
+            ? $this->assertNull($report['reason'])
+            : $this->assertStringContainsString("pg_dump {$client} ", $report['reason']);
+    }
+
+    #[Test]
+    #[DataProvider('majorsAroundTheServer')]
+    public function strict_refuses_exactly_the_older_pg_dump_even_by_one_major(int $client, int $server, bool $compatible): void
+    {
+        config()->set('vanguard.dump.pgsql_version_check', 'strict');
+        $this->fakePgDump("pg_dump (PostgreSQL) {$client}.2");
+        $dest = $this->tmpDir."/boundary_{$client}_{$server}.sql.gz";
+
+        try {
+            $this->driverForServer($server)->dump('pgsql', $this->pgConfig(), $dest);
+            $this->assertTrue($compatible, "pg_dump {$client} against a server {$server} must be refused in strict mode.");
+            $this->assertSame(['version', 'dump'], $this->calls());
+            $this->assertFileExists($dest);
+        } catch (RuntimeException $e) {
+            $this->assertFalse($compatible, "pg_dump {$client} against a server {$server} must pass: ".$e->getMessage());
+            $this->assertStringContainsString("pg_dump {$client} ", $e->getMessage());
+            $this->assertStringContainsString("PostgreSQL {$server} server", $e->getMessage());
+            $this->assertSame(['version'], $this->calls(), 'the dump itself must never start');
+            $this->assertFileDoesNotExist($dest);
+        }
     }
 
     #[Test]
