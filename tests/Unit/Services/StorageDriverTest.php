@@ -10,6 +10,7 @@ use SoftArtisan\Vanguard\Tests\TestCase;
 class StorageDriverTest extends TestCase
 {
     private StorageDriver $driver;
+
     private string $tmpDir;
 
     protected function setUp(): void
@@ -194,8 +195,8 @@ class StorageDriverTest extends TestCase
         file_put_contents($src.'/keep/important.txt', 'keep this');
         file_put_contents($src.'/exclude_me/secret.txt', 'exclude this');
 
-        $archive  = $this->tmpDir.'/selective.tar.gz';
-        $extract  = $this->tmpDir.'/selective_out';
+        $archive = $this->tmpDir.'/selective.tar.gz';
+        $extract = $this->tmpDir.'/selective_out';
 
         $this->driver->archive([$src], [$src.'/exclude_me'], $archive);
         $this->driver->extract($archive, $extract);

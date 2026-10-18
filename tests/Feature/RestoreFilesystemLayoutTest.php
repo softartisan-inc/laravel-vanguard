@@ -19,13 +19,14 @@ use SoftArtisan\Vanguard\Tests\TestCase;
 class RestoreFilesystemLayoutTest extends TestCase
 {
     private string $tmpDir;
+
     private string $storageDir;
 
     protected function setUp(): void
     {
         parent::setUp();
 
-        $this->tmpDir     = sys_get_temp_dir().'/vanguard_restore_layout_'.uniqid();
+        $this->tmpDir = sys_get_temp_dir().'/vanguard_restore_layout_'.uniqid();
         $this->storageDir = $this->tmpDir.'/storage';
 
         mkdir($this->storageDir.'/app/public', 0755, true);
@@ -34,7 +35,7 @@ class RestoreFilesystemLayoutTest extends TestCase
         $this->app->useStoragePath($this->storageDir);
 
         config([
-            'vanguard.tmp_path'                 => $this->tmpDir.'/tmp',
+            'vanguard.tmp_path' => $this->tmpDir.'/tmp',
             'vanguard.sources.filesystem_paths' => ['app'],
         ]);
     }
@@ -61,7 +62,7 @@ class RestoreFilesystemLayoutTest extends TestCase
 
         $this->restoreService($archive)->restore($record, [
             'verify_checksum' => false,
-            'restore_db'      => false,
+            'restore_db' => false,
             'restore_storage' => true,
         ]);
 
@@ -81,7 +82,7 @@ class RestoreFilesystemLayoutTest extends TestCase
 
         $this->restoreService($archive)->restore($record, [
             'verify_checksum' => false,
-            'restore_db'      => false,
+            'restore_db' => false,
             'restore_storage' => true,
         ]);
 
@@ -114,7 +115,7 @@ class RestoreFilesystemLayoutTest extends TestCase
 
         $this->restoreService($archive)->restore($record, [
             'verify_checksum' => false,
-            'restore_db'      => false,
+            'restore_db' => false,
             'restore_storage' => true,
         ]);
 
