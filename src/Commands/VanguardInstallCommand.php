@@ -43,12 +43,34 @@ class VanguardInstallCommand extends Command
     }
 
     /**
-     * Warn about settings this version knows and the published config does not.
+     * Opt-in settings whose built-in default keeps the behaviour of the
+     * versions that did not have them: an older published config lacking them
+     * runs exactly as before. An entry ending with a dot covers a whole section.
+     *
+     * Every other key keeps being reported as missing — its default may not be
+     * what the installation expects (a missing notifications.mail.to means no
+     * alert is ever sent).
+     *
+     * @var list<string>
+     */
+    protected const OPTIONAL_KEYS = [
+        'sources.on_empty_filesystem',
+        'tenancy.database_mode',
+        'database.',
+        'dump.pgsql_version_check',
+        'binaries.age',
+        'encryption.',
+        'r2.',
+    ];
+
+    /**
+     * Report settings this version knows and the published config does not.
      *
      * vendor:publish never overwrites an existing config file, so upgrading the
      * package leaves a config from an older version in place. Every read has a
-     * default, but a default of "empty" silently disables the feature — a
-     * missing notifications.mail.to means no alert will ever be sent.
+     * default, but a default of "empty" can silently disable a feature, so
+     * those keys are listed as missing. Opt-in settings whose default keeps the
+     * previous behaviour (OPTIONAL_KEYS) are listed apart, as nothing to do.
      */
     protected function checkPublishedConfigIsCurrent(): void
     {
@@ -61,28 +83,67 @@ class VanguardInstallCommand extends Command
         $shipped = require __DIR__.'/../../config/vanguard.php';
         $published = require $publishedPath;
 
-        $missing = array_diff_key(
+        $absent = array_keys(array_diff_key(
             $this->flattenKeys($shipped),
             $this->flattenKeys($published),
-        );
+        ));
 
-        if ($missing === []) {
+        if ($absent === []) {
             $this->line('   <info>Published config is up to date.</info>');
 
             return;
         }
 
-        $this->newLine();
-        $this->warn('   Your published config/vanguard.php predates this version and is missing:');
+        $optional = array_values(array_filter($absent, fn (string $key): bool => $this->isOptionalKey($key)));
+        $missing = array_values(array_diff($absent, $optional));
 
-        foreach (array_keys($missing) as $key) {
-            $this->line("     - {$key}");
+        $this->newLine();
+        $this->line('   <comment>Your published config/vanguard.php predates this version.</comment>');
+
+        if ($missing !== []) {
+            $this->warn('   Missing settings (the built-in default may not be what you expect):');
+
+            foreach ($missing as $key) {
+                $this->line("     - {$key}");
+            }
+
+            $this->line('   <comment>Each falls back to a built-in default, but a setting you cannot see</comment>');
+            $this->line('   <comment>is a setting you cannot rely on. Compare against</comment>');
+            $this->line('   <comment>vendor/softartisan/laravel-vanguard/config/vanguard.php, or republish with</comment>');
+            $this->line('   <comment>php artisan vendor:publish --tag=vanguard-config --force</comment> (overwrites yours).');
         }
 
-        $this->line('   <comment>Each falls back to a built-in default, but a setting you cannot see</comment>');
-        $this->line('   <comment>is a setting you cannot rely on. Compare against</comment>');
-        $this->line('   <comment>vendor/softartisan/laravel-vanguard/config/vanguard.php, or republish with</comment>');
-        $this->line('   <comment>php artisan vendor:publish --tag=vanguard-config --force</comment> (overwrites yours).');
+        if ($optional !== []) {
+            $this->line('   <info>New optional settings (disabled by default, nothing to do):</info>');
+
+            foreach ($optional as $key) {
+                // Laravel merges the package config one level deep only: a key
+                // nested in a section the published config already has is not
+                // merged, so its environment variable alone is never read.
+                $note = array_key_exists(strtok($key, '.'), $published)
+                    ? ' <comment>(to opt in, copy this key into your config first)</comment>'
+                    : '';
+
+                $this->line("     - {$key}{$note}");
+            }
+
+            $this->line('   Without them, Vanguard behaves exactly as before. Documented in');
+            $this->line('   vendor/softartisan/laravel-vanguard/config/vanguard.php.');
+        }
+    }
+
+    /**
+     * Whether an absent key is an opt-in setting whose default changes nothing.
+     */
+    protected function isOptionalKey(string $key): bool
+    {
+        foreach (self::OPTIONAL_KEYS as $optional) {
+            if ($key === $optional || (str_ends_with($optional, '.') && str_starts_with($key, $optional))) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
