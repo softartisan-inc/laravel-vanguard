@@ -18,7 +18,7 @@ class OperationsConsoleFlowTest extends TestCase
         parent::setUp();
 
         Vanguard::auth(fn ($request) => true);
-        Vanguard::restoreActor(fn () => 'ops@in-immo.app');
+        Vanguard::restoreActor(fn () => 'ops@example.com');
     }
 
     protected function tearDown(): void
@@ -76,7 +76,7 @@ class OperationsConsoleFlowTest extends TestCase
         // 7. It is readable one row at a time, which is the SSE fallback.
         $this->getJson("/vanguard/api/restores/{$restoreId}")->assertOk()
             ->assertJsonPath('data.status', 'pending')
-            ->assertJsonPath('data.requested_by', 'ops@in-immo.app');
+            ->assertJsonPath('data.requested_by', 'ops@example.com');
 
         // 8. And it is in the history.
         $this->getJson('/vanguard/api/restores?status=pending')->assertOk()->assertJsonCount(1, 'data');

@@ -13,6 +13,7 @@ use SoftArtisan\Vanguard\Events\RestoreFailed;
 use SoftArtisan\Vanguard\Events\RestoreStarted;
 use SoftArtisan\Vanguard\Models\BackupRecord;
 use SoftArtisan\Vanguard\Models\RestoreRecord;
+use SoftArtisan\Vanguard\Services\Encryption\AgeEncryptor;
 use SoftArtisan\Vanguard\Services\RestoreService;
 use SoftArtisan\Vanguard\Vanguard;
 
@@ -92,6 +93,19 @@ class RunRestoreJob implements ShouldQueue
             // started_at is written alongside the failure so a row that
             // never ran still records when the attempt was made, matching
             // every other row.
+            $this->persistFailure($restore, $message, ['started_at' => now()]);
+            event(new RestoreFailed($restore, new \RuntimeException($message)));
+
+            return;
+        }
+
+        // Defensive: the endpoint already refuses encrypted backups. A key
+        // cannot reach a worker, so such a restore fails here, by name,
+        // before anything is downloaded.
+        if (AgeEncryptor::isEncryptedRecord($backup)) {
+            $message = "Backup #{$backup->id} is age-encrypted and cannot be restored from the queue: "
+                ."run php artisan vanguard:restore {$backup->id} --identity=<file> on the server.";
+
             $this->persistFailure($restore, $message, ['started_at' => now()]);
             event(new RestoreFailed($restore, new \RuntimeException($message)));
 

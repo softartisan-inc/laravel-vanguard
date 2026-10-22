@@ -57,12 +57,12 @@ class TenancyResolverTest extends TestCase
     {
         config(['database.default' => 'sqlite']);
         config(['database.connections.sqlite' => [
-            'driver'   => 'sqlite',
+            'driver' => 'sqlite',
             'database' => ':memory:',
         ]]);
 
         $resolver = new TenancyResolver;
-        $config   = $resolver->landlordDbConfig();
+        $config = $resolver->landlordDbConfig();
 
         $this->assertIsArray($config);
         $this->assertSame('sqlite', $config['driver']);
@@ -73,12 +73,12 @@ class TenancyResolverTest extends TestCase
     {
         config(['tenancy.database.central_connection' => 'sqlite']);
         config(['database.connections.sqlite' => [
-            'driver'   => 'sqlite',
+            'driver' => 'sqlite',
             'database' => ':memory:',
         ]]);
 
         $resolver = new TenancyResolver;
-        $config   = $resolver->landlordDbConfig();
+        $config = $resolver->landlordDbConfig();
 
         $this->assertSame('sqlite', $config['driver']);
     }
@@ -90,7 +90,8 @@ class TenancyResolverTest extends TestCase
     #[Test]
     public function tenant_schedule_returns_null_when_attribute_not_set(): void
     {
-        $tenant = new class {
+        $tenant = new class
+        {
             // no vanguard_schedule attribute
         };
 
@@ -102,7 +103,8 @@ class TenancyResolverTest extends TestCase
     #[Test]
     public function tenant_schedule_returns_cron_when_attribute_is_set(): void
     {
-        $tenant = new class {
+        $tenant = new class
+        {
             public string $vanguard_schedule = '0 4 * * 0'; // weekly
         };
 
@@ -114,7 +116,8 @@ class TenancyResolverTest extends TestCase
     #[Test]
     public function tenant_schedule_returns_null_when_attribute_is_null(): void
     {
-        $tenant = new class {
+        $tenant = new class
+        {
             public ?string $vanguard_schedule = null;
         };
 

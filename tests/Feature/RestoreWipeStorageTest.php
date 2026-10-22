@@ -13,13 +13,14 @@ use SoftArtisan\Vanguard\Tests\TestCase;
 class RestoreWipeStorageTest extends TestCase
 {
     private string $tmpDir;
+
     private string $storageDir;
 
     protected function setUp(): void
     {
         parent::setUp();
 
-        $this->tmpDir     = sys_get_temp_dir().'/vanguard_wipe_'.uniqid();
+        $this->tmpDir = sys_get_temp_dir().'/vanguard_wipe_'.uniqid();
         $this->storageDir = $this->tmpDir.'/storage';
 
         mkdir($this->storageDir.'/app', 0755, true);
@@ -31,7 +32,7 @@ class RestoreWipeStorageTest extends TestCase
         $this->app->useStoragePath($this->storageDir);
 
         config([
-            'vanguard.tmp_path'                 => $this->tmpDir.'/tmp',
+            'vanguard.tmp_path' => $this->tmpDir.'/tmp',
             'vanguard.sources.filesystem_paths' => ['app'],
         ]);
     }
@@ -59,7 +60,7 @@ class RestoreWipeStorageTest extends TestCase
 
         $this->restoreService($archive)->restore($record, [
             'verify_checksum' => false,
-            'restore_db'      => false,
+            'restore_db' => false,
             'restore_storage' => true,
         ]);
 
@@ -82,9 +83,9 @@ class RestoreWipeStorageTest extends TestCase
 
         $this->restoreService($archive)->restore($record, [
             'verify_checksum' => false,
-            'restore_db'      => false,
+            'restore_db' => false,
             'restore_storage' => true,
-            'wipe_storage'    => true,
+            'wipe_storage' => true,
         ]);
 
         // The file that did not exist at backup time is gone…
@@ -106,9 +107,9 @@ class RestoreWipeStorageTest extends TestCase
 
         $this->restoreService($archive)->restore($record, [
             'verify_checksum' => false,
-            'restore_db'      => false,
+            'restore_db' => false,
             'restore_storage' => true,
-            'wipe_storage'    => true,
+            'wipe_storage' => true,
         ]);
 
         $this->assertFileExists($this->storageDir.'/logs/laravel.log');
@@ -132,9 +133,9 @@ class RestoreWipeStorageTest extends TestCase
 
         $this->restoreService($archive)->restore($record, [
             'verify_checksum' => false,
-            'restore_db'      => false,
+            'restore_db' => false,
             'restore_storage' => true,
-            'wipe_storage'    => true,
+            'wipe_storage' => true,
         ]);
 
         $this->assertFileExists($this->storageDir.'/logs/laravel.log');
@@ -153,9 +154,9 @@ class RestoreWipeStorageTest extends TestCase
 
         $this->restoreService($archive)->restore($record, [
             'verify_checksum' => false,
-            'restore_db'      => false,
+            'restore_db' => false,
             'restore_storage' => true,
-            'wipe_storage'    => true,
+            'wipe_storage' => true,
         ]);
 
         $this->assertFileDoesNotExist($this->storageDir.'/app/created-after-backup.txt');
@@ -173,9 +174,9 @@ class RestoreWipeStorageTest extends TestCase
 
         $this->restoreService($archive)->restore($record, [
             'verify_checksum' => false,
-            'restore_db'      => false,
+            'restore_db' => false,
             'restore_storage' => false,
-            'wipe_storage'    => true,
+            'wipe_storage' => true,
         ]);
 
         $this->assertFileExists($this->storageDir.'/app/created-after-backup.txt');
@@ -223,7 +224,7 @@ class RestoreWipeStorageTest extends TestCase
      */
     private function filenamesUnder(string $directory): array
     {
-        $names    = [];
+        $names = [];
         $iterator = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($directory, \FilesystemIterator::SKIP_DOTS));
 
         foreach ($iterator as $file) {

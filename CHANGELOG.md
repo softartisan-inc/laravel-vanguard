@@ -7,6 +7,95 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
+## [2.7.0] — 2026-10-22
+
+### Every new mode is opt-in; the defaults are unchanged
+
+Everything below is **opt-in**: with the shipped defaults, backups, restores,
+the health payload and the dashboard behave exactly as in 2.6.1. No migration,
+no config republish: an application that sets none of the new variables gets
+the same archives, the same extensions (`.tar`), the same checksums and the
+same API payloads as before. Tests cover the default of each new setting.
+
+### Added
+
+- **Dedicated backup/restore connections** — `VANGUARD_BACKUP_CONNECTION` and
+  `VANGUARD_RESTORE_CONNECTION` (runtime, default unset) name connections of
+  their own for the landlord dump and restore: on PostgreSQL with Row-Level
+  Security, a dump taken as the application role only holds what that role can
+  see. An undeclared connection or a driver mismatch fails loudly instead of
+  falling back. See *Dedicated backup/restore connections* in the README.
+- **Single-database tenancy** — `VANGUARD_TENANCY_DATABASE_MODE=single`
+  (runtime, default `multi`) for applications that keep every tenant in one
+  shared database: the database is backed up once by the landlord backup, a
+  tenant backup holds the tenant's files only, and no tenant connection is
+  ever read. Tenant restores are files only in that mode, and one without
+  `restore_storage` is refused by the console, the restore endpoint (`400`)
+  and the restore job alike, since it would restore nothing. Restoring a
+  single tenant's rows out of the shared database is not covered.
+- **Encrypted archives (age)** — `VANGUARD_ENCRYPTION_ENABLED` (runtime,
+  default `false`) encrypts every new archive with age to the public keys in
+  `VANGUARD_ENCRYPTION_RECIPIENTS` / `VANGUARD_ENCRYPTION_RECIPIENTS_FILE`,
+  stored as `{name}.tar.age`; `VANGUARD_AGE_BINARY` pins the binary. Restores
+  take the private key at restore time (`vanguard:restore --identity=<file>` or
+  `--identity-stdin`); it is never stored. Encrypted backups are refused by the
+  restore endpoint and the restore job (`400` naming the console command), and
+  marked *encrypted* on the dashboard. A missing binary or recipient fails the
+  backup before the dump, with no plaintext fallback. See *Encrypted archives*
+  in the README.
+- **`pg_dump` / server major check** — `VANGUARD_PG_VERSION_CHECK` (runtime,
+  default `off`): `warn` logs an older `pg_dump` than the server, `strict`
+  refuses the backup before the dump starts, naming both versions and the
+  binary to pin (`VANGUARD_PG_DUMP_BINARY`, `VANGUARD_PSQL_BINARY`). An
+  unreadable version never blocks. With the check on, the health screen
+  reports both majors. See *PostgreSQL: matching `pg_dump` to the server*.
+- **Cloudflare R2** — with `VANGUARD_R2_BUCKET` and `VANGUARD_R2_ACCOUNT_ID`
+  (or `VANGUARD_R2_ENDPOINT`), Vanguard declares an S3-compatible disk
+  (`vanguard-r2` by default: region `auto`, path-style endpoint, optional EU
+  jurisdiction) to use as the remote destination. A disk of that name already
+  declared by the application wins, and no other disk (`s3` included) is
+  touched. `Vanguard::r2DiskConfig()` builds it for a disk of your own. The
+  health screen and `vanguard:install` name the missing
+  `league/flysystem-aws-s3-v3` adapter. See *Cloudflare R2*.
+- `vanguard:install` lists the new variables. Against a config published by an
+  earlier version, its drift report lists them apart, under *New optional
+  settings (disabled by default, nothing to do)*, and keeps *missing* for the
+  keys whose absence can change behaviour (such as `notifications.mail.to`).
+  Opt-in keys nested in a section the published config already has are flagged:
+  they must be copied into it before their environment variable is read.
+
+### Upgrade notes — for packages that extend Vanguard
+
+Applications that only use Vanguard have nothing to do. See *Upgrading to 2.7*
+in the README.
+
+- **`BackupManager::createRecord()`** gains a fourth, optional parameter,
+  `?array $sources = null` (what the backup holds; `null` for the configured
+  sources). A subclass that **redefines** it must add the parameter to stay
+  signature-compatible (PHP refuses an override that accepts fewer
+  parameters); a subclass that only calls it has nothing to change.
+- **A subclass that writes its own backups** (dumping and archiving outside
+  `backupLandlord()` / `backupTenant()` / `backupFilesystem()`) should call
+  `assertEncryptionReady()` before dumping or archiving to honour the opt-in
+  encryption. Without it, a missing recipient or `age` binary is only reported
+  when the archive is bundled — after the dump, but never as a plaintext
+  archive.
+- **The published config does not need to be republished**: the new keys fall
+  back to defaults that keep the 2.6 behaviour. To opt in from an older
+  config, the keys nested in an existing section (`tenancy.database_mode`,
+  `dump.pgsql_version_check`, `binaries.age`) must first be copied into it:
+  Laravel merges a package config one level deep only. The new `database`,
+  `encryption` and `r2` sections need no copy.
+
+### Documentation
+
+- **Authentication** — the default dashboard check only requires a logged-in
+  user; authorization stays in the application (`Vanguard::auth()`), with a
+  Gate example and guidance for serving the dashboard to platform operators
+  only in a multi-tenant application.
+
+---
+
 ## [2.6.1] — 2026-09-02
 
 ### A backup no longer dies because Horizon rebalanced

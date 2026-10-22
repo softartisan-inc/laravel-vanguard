@@ -90,13 +90,13 @@ class HealthEndpointTest extends TestCase
     public function no_secret_value_ever_reaches_the_payload(): void
     {
         config([
-            'vanguard.notifications.mail.to' => 'ops-secret@in-immo.app',
+            'vanguard.notifications.mail.to' => 'ops-secret@example.com',
             'vanguard.notifications.slack.webhook_url' => 'https://hooks.slack.com/services/T00/B00/xoxb-do-not-leak',
         ]);
 
         $payload = $this->getJson('/vanguard/api/health')->assertOk()->getContent();
 
-        $this->assertStringNotContainsString('ops-secret@in-immo.app', $payload);
+        $this->assertStringNotContainsString('ops-secret@example.com', $payload);
         $this->assertStringNotContainsString('hooks.slack.com', $payload);
         $this->assertStringNotContainsString('xoxb-do-not-leak', $payload);
 

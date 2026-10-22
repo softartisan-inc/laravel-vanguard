@@ -63,6 +63,11 @@
                 class="row-flag"
                 title="This backup archived no file at all"
               >∅</span>
+              <span
+                v-if="r.encrypted"
+                class="tag tag-encrypted"
+                title="Encrypted with age: restore it from the console with --identity=<file>"
+              >encrypted</span>
             </td>
             <td>{{ r.file_size_human || '—' }}</td>
             <td class="col-dim">{{ r.duration || '—' }}</td>
@@ -111,6 +116,7 @@
               <div class="detail-grid">
                 <div><span class="detail-key">destinations</span> {{ destinations(r) }}</div>
                 <div><span class="detail-key">checksum</span> {{ r.checksum || '—' }}</div>
+                <div v-if="r.encrypted"><span class="detail-key">encryption</span> age — the checksum is that of the encrypted file</div>
                 <div><span class="detail-key">started</span> {{ r.started_at ? formatDate(r.started_at) : '—' }}</div>
                 <div><span class="detail-key">completed</span> {{ r.completed_at ? formatDate(r.completed_at) : '—' }}</div>
               </div>

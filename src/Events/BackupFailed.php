@@ -8,6 +8,6 @@ class BackupFailed
 {
     public function __construct(
         public readonly BackupRecord $record,
-        public readonly \Throwable   $exception,
+        public readonly \Throwable $exception,
     ) {}
 }

@@ -3,6 +3,7 @@
 namespace SoftArtisan\Vanguard\Tests\Unit\Models;
 
 use Carbon\Carbon;
+use Illuminate\Support\Facades\DB;
 use PHPUnit\Framework\Attributes\Test;
 use SoftArtisan\Vanguard\Models\BackupRecord;
 use SoftArtisan\Vanguard\Tests\TestCase;
@@ -100,7 +101,7 @@ class BackupRecordTest extends TestCase
     public function it_returns_duration_in_seconds_when_under_one_minute(): void
     {
         $record = $this->makeRecord([
-            'started_at'   => Carbon::now()->subSeconds(45),
+            'started_at' => Carbon::now()->subSeconds(45),
             'completed_at' => Carbon::now(),
         ]);
 
@@ -111,7 +112,7 @@ class BackupRecordTest extends TestCase
     public function it_returns_duration_in_minutes_and_seconds(): void
     {
         $record = $this->makeRecord([
-            'started_at'   => Carbon::now()->subSeconds(125),
+            'started_at' => Carbon::now()->subSeconds(125),
             'completed_at' => Carbon::now(),
         ]);
 
@@ -122,7 +123,7 @@ class BackupRecordTest extends TestCase
     public function it_returns_null_duration_when_dates_are_missing(): void
     {
         $record = $this->makeRecord([
-            'started_at'   => null,
+            'started_at' => null,
             'completed_at' => null,
         ]);
 
@@ -193,7 +194,7 @@ class BackupRecordTest extends TestCase
     public function it_casts_sources_and_destinations_as_arrays(): void
     {
         $record = $this->makeRecord([
-            'sources'      => ['landlord_database', 'filesystem'],
+            'sources' => ['landlord_database', 'filesystem'],
             'destinations' => ['local', 'remote'],
         ]);
 
@@ -228,7 +229,7 @@ class BackupRecordTest extends TestCase
 
         // Should be pruned: completed + old
         $old = $this->makeRecord(['status' => 'completed']);
-        \Illuminate\Support\Facades\DB::table('vanguard_backups')
+        DB::table('vanguard_backups')
             ->where('id', $old->id)
             ->update(['created_at' => now()->subDays(10)]);
 
@@ -237,7 +238,7 @@ class BackupRecordTest extends TestCase
 
         // Should NOT be pruned: failed (even if old)
         $failed = $this->makeRecord(['status' => 'failed']);
-        \Illuminate\Support\Facades\DB::table('vanguard_backups')
+        DB::table('vanguard_backups')
             ->where('id', $failed->id)
             ->update(['created_at' => now()->subDays(10)]);
 

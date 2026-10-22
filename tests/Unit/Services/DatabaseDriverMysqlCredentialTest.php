@@ -282,13 +282,15 @@ class DatabaseDriverMysqlCredentialTest extends TestCase
     #[Test]
     public function the_real_mysql_client_reads_that_password_back_unchanged(): void
     {
-        // Not a re-implementation of the option-file parser: the actual client
-        // is asked what it understood. --print-defaults makes it echo the
-        // options it would have started with, password included.
-        $mysqldump = trim(shell_exec('command -v mysqldump 2>/dev/null') ?: '');
+        // Not a re-implementation of the option-file parser: the client's own
+        // option reader is asked what it understood. my_print_defaults ships
+        // with every MySQL and MariaDB client and, with --show, prints the
+        // password in clear. `mysqldump --print-defaults` is not used: recent
+        // MySQL clients mask it there (`--password=*****`), which proves nothing.
+        $reader = trim(shell_exec('command -v my_print_defaults 2>/dev/null') ?: '');
 
-        if ($mysqldump === '') {
-            $this->markTestSkipped('mysqldump is not installed on this machine.');
+        if ($reader === '') {
+            $this->markTestSkipped('my_print_defaults (MySQL/MariaDB client) is not installed on this machine.');
         }
 
         $driver = new ExposedCredentialDatabaseDriver;
@@ -299,13 +301,18 @@ class DatabaseDriverMysqlCredentialTest extends TestCase
             // would silently drop the trailing space this password ends with —
             // the very character an unquoted value would have lost.
             $output = (string) shell_exec(sprintf(
-                '%s --defaults-extra-file=%s --print-defaults 2>&1',
-                escapeshellcmd($mysqldump),
+                '%s --defaults-file=%s --show client 2>&1',
+                escapeshellcmd($reader),
                 escapeshellarg($file),
             ));
 
+            $this->assertStringNotContainsString(
+                '--password=*',
+                $output,
+                'The option reader masked the password: the check would prove nothing.',
+            );
             $this->assertStringContainsString(
-                '--password='.self::AWKWARD_PASSWORD,
+                '--password='.self::AWKWARD_PASSWORD."\n",
                 $output,
                 'The client did not read back the password the driver wrote.',
             );

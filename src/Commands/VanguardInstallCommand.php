@@ -4,6 +4,7 @@ namespace SoftArtisan\Vanguard\Commands;
 
 use Illuminate\Console\Command;
 use SoftArtisan\Vanguard\Services\Drivers\DatabaseDriver;
+use SoftArtisan\Vanguard\Vanguard;
 
 class VanguardInstallCommand extends Command
 {
@@ -42,12 +43,34 @@ class VanguardInstallCommand extends Command
     }
 
     /**
-     * Warn about settings this version knows and the published config does not.
+     * Opt-in settings whose built-in default keeps the behaviour of the
+     * versions that did not have them: an older published config lacking them
+     * runs exactly as before. An entry ending with a dot covers a whole section.
+     *
+     * Every other key keeps being reported as missing — its default may not be
+     * what the installation expects (a missing notifications.mail.to means no
+     * alert is ever sent).
+     *
+     * @var list<string>
+     */
+    protected const OPTIONAL_KEYS = [
+        'sources.on_empty_filesystem',
+        'tenancy.database_mode',
+        'database.',
+        'dump.pgsql_version_check',
+        'binaries.age',
+        'encryption.',
+        'r2.',
+    ];
+
+    /**
+     * Report settings this version knows and the published config does not.
      *
      * vendor:publish never overwrites an existing config file, so upgrading the
      * package leaves a config from an older version in place. Every read has a
-     * default, but a default of "empty" silently disables the feature — a
-     * missing notifications.mail.to means no alert will ever be sent.
+     * default, but a default of "empty" can silently disable a feature, so
+     * those keys are listed as missing. Opt-in settings whose default keeps the
+     * previous behaviour (OPTIONAL_KEYS) are listed apart, as nothing to do.
      */
     protected function checkPublishedConfigIsCurrent(): void
     {
@@ -60,28 +83,67 @@ class VanguardInstallCommand extends Command
         $shipped = require __DIR__.'/../../config/vanguard.php';
         $published = require $publishedPath;
 
-        $missing = array_diff_key(
+        $absent = array_keys(array_diff_key(
             $this->flattenKeys($shipped),
             $this->flattenKeys($published),
-        );
+        ));
 
-        if ($missing === []) {
+        if ($absent === []) {
             $this->line('   <info>Published config is up to date.</info>');
 
             return;
         }
 
-        $this->newLine();
-        $this->warn('   Your published config/vanguard.php predates this version and is missing:');
+        $optional = array_values(array_filter($absent, fn (string $key): bool => $this->isOptionalKey($key)));
+        $missing = array_values(array_diff($absent, $optional));
 
-        foreach (array_keys($missing) as $key) {
-            $this->line("     - {$key}");
+        $this->newLine();
+        $this->line('   <comment>Your published config/vanguard.php predates this version.</comment>');
+
+        if ($missing !== []) {
+            $this->warn('   Missing settings (the built-in default may not be what you expect):');
+
+            foreach ($missing as $key) {
+                $this->line("     - {$key}");
+            }
+
+            $this->line('   <comment>Each falls back to a built-in default, but a setting you cannot see</comment>');
+            $this->line('   <comment>is a setting you cannot rely on. Compare against</comment>');
+            $this->line('   <comment>vendor/softartisan/laravel-vanguard/config/vanguard.php, or republish with</comment>');
+            $this->line('   <comment>php artisan vendor:publish --tag=vanguard-config --force</comment> (overwrites yours).');
         }
 
-        $this->line('   <comment>Each falls back to a built-in default, but a setting you cannot see</comment>');
-        $this->line('   <comment>is a setting you cannot rely on. Compare against</comment>');
-        $this->line('   <comment>vendor/softartisan/laravel-vanguard/config/vanguard.php, or republish with</comment>');
-        $this->line('   <comment>php artisan vendor:publish --tag=vanguard-config --force</comment> (overwrites yours).');
+        if ($optional !== []) {
+            $this->line('   <info>New optional settings (disabled by default, nothing to do):</info>');
+
+            foreach ($optional as $key) {
+                // Laravel merges the package config one level deep only: a key
+                // nested in a section the published config already has is not
+                // merged, so its environment variable alone is never read.
+                $note = array_key_exists(strtok($key, '.'), $published)
+                    ? ' <comment>(to opt in, copy this key into your config first)</comment>'
+                    : '';
+
+                $this->line("     - {$key}{$note}");
+            }
+
+            $this->line('   Without them, Vanguard behaves exactly as before. Documented in');
+            $this->line('   vendor/softartisan/laravel-vanguard/config/vanguard.php.');
+        }
+    }
+
+    /**
+     * Whether an absent key is an opt-in setting whose default changes nothing.
+     */
+    protected function isOptionalKey(string $key): bool
+    {
+        foreach (self::OPTIONAL_KEYS as $optional) {
+            if ($key === $optional || (str_ends_with($optional, '.') && str_starts_with($key, $optional))) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -155,6 +217,18 @@ class VanguardInstallCommand extends Command
         $this->line('     <comment>],</comment>');
         $this->newLine();
 
+        $this->line('  <info>4b. Cloudflare R2</info> — S3-compatible, used as the remote destination:');
+        $this->line('     <comment>composer require league/flysystem-aws-s3-v3</comment>');
+        $this->line('     Vanguard declares the disk itself once these are set (no filesystems.php entry):');
+        $this->line('     <comment>VANGUARD_R2_ACCOUNT_ID=</comment>');
+        $this->line('     <comment>VANGUARD_R2_ACCESS_KEY_ID=</comment>');
+        $this->line('     <comment>VANGUARD_R2_SECRET_ACCESS_KEY=</comment>');
+        $this->line('     <comment>VANGUARD_R2_BUCKET=</comment>');
+        $this->line('     <comment># VANGUARD_R2_JURISDICTION=eu   # only for an EU-jurisdiction bucket</comment>');
+        $this->line('     <comment>VANGUARD_REMOTE_ENABLED=true</comment>');
+        $this->line('     <comment>VANGUARD_REMOTE_DISK=vanguard-r2</comment>');
+        $this->newLine();
+
         $this->line('  <info>5. Environment variables</info> — add to <comment>.env</comment> as needed:');
         $this->line('     <comment>VANGUARD_QUEUE_CONNECTION=redis</comment>');
         $this->line('     <comment>VANGUARD_QUEUE_NAME=vanguard</comment>');
@@ -167,6 +241,20 @@ class VanguardInstallCommand extends Command
         $this->line('     <comment># Alerts — without an address a failing backup stays silent:</comment>');
         $this->line('     <comment>VANGUARD_NOTIFY_FAILURE=true</comment>');
         $this->line('     <comment>VANGUARD_NOTIFY_MAIL=ops@example.com</comment>');
+        $this->line('     <comment># Dedicated dump/restore connections (names from config/database.php),</comment>');
+        $this->line('     <comment># e.g. for PostgreSQL Row-Level Security — unset = application connection:</comment>');
+        $this->line('     <comment>VANGUARD_BACKUP_CONNECTION=</comment>');
+        $this->line('     <comment>VANGUARD_RESTORE_CONNECTION=</comment>');
+        $this->line('     <comment># One database shared by all tenants (multi = one per tenant, default):</comment>');
+        $this->line('     <comment>VANGUARD_TENANCY_DATABASE_MODE=multi</comment>');
+        $this->line('     <comment># Encrypt archives with age to public keys (generate the key pair OFF the server):</comment>');
+        $this->line('     <comment>VANGUARD_ENCRYPTION_ENABLED=false</comment>');
+        $this->line('     <comment>VANGUARD_ENCRYPTION_RECIPIENTS=age1...</comment>');
+        $this->line('     <comment>VANGUARD_ENCRYPTION_RECIPIENTS_FILE=</comment>');
+        $this->line('     <comment>VANGUARD_AGE_BINARY=</comment>');
+        $this->line('     <comment># PostgreSQL: compare pg_dump and server majors before each dump (off|warn|strict):</comment>');
+        $this->line('     <comment>VANGUARD_PG_VERSION_CHECK=off</comment>');
+        $this->line('     <comment>VANGUARD_PG_DUMP_BINARY=</comment>');
         $this->line('     # Remote (S3):');
         $this->line('     <comment>VANGUARD_REMOTE_ENABLED=false</comment>');
         $this->line('     <comment>VANGUARD_REMOTE_DISK=s3</comment>');
@@ -211,6 +299,15 @@ class VanguardInstallCommand extends Command
                 $this->newLine();
                 $this->warn("⚠  The {$label} destination is enabled but disk [{$disk}] is not declared in config/filesystems.php.");
                 $this->warn('   Add the disk configuration before running backups (see step 4 of next steps).');
+
+                continue;
+            }
+
+            // A disk declared from vanguard.r2 counts as declared; it still
+            // needs the S3 adapter.
+            if (is_string($disk) && ($problem = Vanguard::r2DiskProblem($disk)) !== null) {
+                $this->newLine();
+                $this->warn("⚠  {$problem}");
             }
         }
     }

@@ -36,7 +36,7 @@ class GzipDumpWriter
     /**
      * Open a destination for a gzipped dump.
      *
-     * @param  string  $dest   Absolute destination path (.sql.gz)
+     * @param  string  $dest  Absolute destination path (.sql.gz)
      * @param  string  $label  Short label used in error messages (e.g. 'mysqldump')
      *
      * @throws RuntimeException When the destination cannot be opened
@@ -87,7 +87,7 @@ class GzipDumpWriter
         }
 
         $tailWritten = $this->writeAll(deflate_add($this->deflate, '', ZLIB_FINISH));
-        $closed      = fclose($this->handle);
+        $closed = fclose($this->handle);
         $this->handle = null;
 
         if (! $tailWritten || $closed === false) {
@@ -127,11 +127,11 @@ class GzipDumpWriter
      * fwrite() may legitimately write less than asked for; only a false return
      * or a stalled write means the destination stopped accepting data.
      *
-     * @return bool  true when every byte was written
+     * @return bool true when every byte was written
      */
     private function writeAll(string $data): bool
     {
-        $length  = strlen($data);
+        $length = strlen($data);
         $written = 0;
 
         while ($written < $length) {

@@ -21,9 +21,13 @@ use SoftArtisan\Vanguard\Tests\TestCase;
 class BackupManagerTest extends TestCase
 {
     private MockInterface $db;
+
     private MockInterface $storage;
+
     private MockInterface $store;
+
     private MockInterface $tenancy;
+
     private BackupManager $manager;
 
     protected function setUp(): void
@@ -31,9 +35,9 @@ class BackupManagerTest extends TestCase
         parent::setUp();
         Event::fake();
 
-        $this->db      = Mockery::mock(DatabaseDriver::class);
+        $this->db = Mockery::mock(DatabaseDriver::class);
         $this->storage = Mockery::mock(StorageDriver::class);
-        $this->store   = Mockery::mock(BackupStorageManager::class);
+        $this->store = Mockery::mock(BackupStorageManager::class);
         $this->tenancy = Mockery::mock(TenancyResolver::class);
 
         // Default clean-up stub
@@ -73,10 +77,10 @@ class BackupManagerTest extends TestCase
         $this->db->shouldReceive('dump')->once()->andReturn('/tmp/db.sql.gz');
 
         $this->store->shouldReceive('bundle')->once()->andReturn([
-            'local_path'  => 'vanguard-backups/landlord_1.tar',
+            'local_path' => 'vanguard-backups/landlord_1.tar',
             'remote_path' => null, 'ftp_path' => null,
-            'size'        => 2048,
-            'checksum'    => str_repeat('a', 64),
+            'size' => 2048,
+            'checksum' => str_repeat('a', 64),
         ]);
 
         $record = $this->manager->backupLandlord();
@@ -212,10 +216,10 @@ class BackupManagerTest extends TestCase
         $this->db->shouldReceive('dump')->once()->andReturn('/tmp/tenant_db.sql.gz');
 
         $this->store->shouldReceive('bundle')->once()->andReturn([
-            'local_path'  => 'vanguard-backups/tenant_acme.tar',
+            'local_path' => 'vanguard-backups/tenant_acme.tar',
             'remote_path' => null, 'ftp_path' => null,
-            'size'        => 512,
-            'checksum'    => str_repeat('e', 64),
+            'size' => 512,
+            'checksum' => str_repeat('e', 64),
         ]);
 
         $record = $this->manager->backupTenant($tenant);
@@ -339,6 +343,7 @@ class BackupManagerTest extends TestCase
                 if ($t->getTenantKey() === 'broken_tenant') {
                     throw new RuntimeException('DB unreachable');
                 }
+
                 return $cb($t);
             });
 
@@ -356,7 +361,7 @@ class BackupManagerTest extends TestCase
 
         $this->assertCount(2, $results);
 
-        $ok     = collect($results)->firstWhere('tenant', 'ok_tenant');
+        $ok = collect($results)->firstWhere('tenant', 'ok_tenant');
         $broken = collect($results)->firstWhere('tenant', 'broken_tenant');
 
         $this->assertArrayHasKey('record', $ok);
@@ -372,15 +377,15 @@ class BackupManagerTest extends TestCase
     public function backup_landlord_includes_ftp_in_destinations_when_enabled(): void
     {
         config(['vanguard.sources.landlord_database' => false]);
-        config(['vanguard.sources.filesystem'        => false]);
-        config(['vanguard.destinations.ftp.enabled'  => true]);
+        config(['vanguard.sources.filesystem' => false]);
+        config(['vanguard.destinations.ftp.enabled' => true]);
 
         $this->store->shouldReceive('bundle')->once()->andReturn([
-            'local_path'  => 'vanguard-backups/l.tar',
+            'local_path' => 'vanguard-backups/l.tar',
             'remote_path' => null,
-            'ftp_path'    => 'vanguard-backups/l.tar',
-            'size'        => 0,
-            'checksum'    => str_repeat('f', 64),
+            'ftp_path' => 'vanguard-backups/l.tar',
+            'size' => 0,
+            'checksum' => str_repeat('f', 64),
         ]);
 
         $record = $this->manager->backupLandlord();
@@ -392,15 +397,15 @@ class BackupManagerTest extends TestCase
     public function backup_landlord_does_not_include_ftp_in_destinations_when_disabled(): void
     {
         config(['vanguard.sources.landlord_database' => false]);
-        config(['vanguard.sources.filesystem'        => false]);
-        config(['vanguard.destinations.ftp.enabled'  => false]);
+        config(['vanguard.sources.filesystem' => false]);
+        config(['vanguard.destinations.ftp.enabled' => false]);
 
         $this->store->shouldReceive('bundle')->once()->andReturn([
-            'local_path'  => 'vanguard-backups/l.tar',
+            'local_path' => 'vanguard-backups/l.tar',
             'remote_path' => null,
-            'ftp_path'    => null,
-            'size'        => 0,
-            'checksum'    => str_repeat('g', 64),
+            'ftp_path' => null,
+            'size' => 0,
+            'checksum' => str_repeat('g', 64),
         ]);
 
         $record = $this->manager->backupLandlord();
@@ -412,14 +417,14 @@ class BackupManagerTest extends TestCase
     public function backup_landlord_stores_ftp_path_on_completed_record(): void
     {
         config(['vanguard.sources.landlord_database' => false]);
-        config(['vanguard.sources.filesystem'        => false]);
+        config(['vanguard.sources.filesystem' => false]);
 
         $this->store->shouldReceive('bundle')->once()->andReturn([
-            'local_path'  => 'vanguard-backups/l.tar',
+            'local_path' => 'vanguard-backups/l.tar',
             'remote_path' => null,
-            'ftp_path'    => 'vanguard-backups/l_ftp.tar',
-            'size'        => 1024,
-            'checksum'    => str_repeat('h', 64),
+            'ftp_path' => 'vanguard-backups/l_ftp.tar',
+            'size' => 1024,
+            'checksum' => str_repeat('h', 64),
         ]);
 
         $record = $this->manager->backupLandlord();
@@ -431,14 +436,14 @@ class BackupManagerTest extends TestCase
     public function backup_landlord_ftp_path_is_null_when_ftp_not_used(): void
     {
         config(['vanguard.sources.landlord_database' => false]);
-        config(['vanguard.sources.filesystem'        => false]);
+        config(['vanguard.sources.filesystem' => false]);
 
         $this->store->shouldReceive('bundle')->once()->andReturn([
-            'local_path'  => 'vanguard-backups/l.tar',
+            'local_path' => 'vanguard-backups/l.tar',
             'remote_path' => null,
-            'ftp_path'    => null,
-            'size'        => 512,
-            'checksum'    => str_repeat('i', 64),
+            'ftp_path' => null,
+            'size' => 512,
+            'checksum' => str_repeat('i', 64),
         ]);
 
         $record = $this->manager->backupLandlord();
@@ -454,6 +459,7 @@ class BackupManagerTest extends TestCase
     {
         $mock = Mockery::mock('Stancl\Tenancy\Contracts\Tenant');
         $mock->shouldReceive('getTenantKey')->andReturn($id);
+
         return $mock;
     }
 }

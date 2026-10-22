@@ -2,6 +2,7 @@
 
 namespace SoftArtisan\Vanguard\Tests\Feature;
 
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Storage;
 use Mockery;
@@ -49,13 +50,13 @@ class BackupRestoreIntegrationTest extends TestCase
     {
         config([
             'vanguard.sources.landlord_database' => true,
-            'vanguard.sources.filesystem'        => false,
-            'vanguard.queue.enabled'             => false,
-            'database.default'                   => 'sqlite',
-            'database.connections.sqlite'        => [
-                'driver'   => 'sqlite',
+            'vanguard.sources.filesystem' => false,
+            'vanguard.queue.enabled' => false,
+            'database.default' => 'sqlite',
+            'database.connections.sqlite' => [
+                'driver' => 'sqlite',
                 'database' => ':memory:',
-                'prefix'   => '',
+                'prefix' => '',
             ],
         ]);
 
@@ -64,10 +65,10 @@ class BackupRestoreIntegrationTest extends TestCase
             config('database.connections.sqlite') + ['driver' => 'sqlite']
         );
 
-        $dbDriver  = new DatabaseDriver;
-        $fsDriver  = new StorageDriver;
-        $store     = new BackupStorageManager;
-        $manager   = new BackupManager($dbDriver, $fsDriver, $store, $tenancy);
+        $dbDriver = new DatabaseDriver;
+        $fsDriver = new StorageDriver;
+        $store = new BackupStorageManager;
+        $manager = new BackupManager($dbDriver, $fsDriver, $store, $tenancy);
 
         // ── Backup ───────────────────────────────────────────────
         $record = $manager->backupLandlord();
@@ -83,12 +84,12 @@ class BackupRestoreIntegrationTest extends TestCase
         Event::assertDispatched(BackupCompleted::class);
 
         // ── Restore ──────────────────────────────────────────────
-        $store2   = new BackupStorageManager;
-        $restore  = new RestoreService($dbDriver, $fsDriver, $store2);
+        $store2 = new BackupStorageManager;
+        $restore = new RestoreService($dbDriver, $fsDriver, $store2);
 
         $result = $restore->restore($record, [
             'verify_checksum' => true,
-            'restore_db'      => true,
+            'restore_db' => true,
             'restore_storage' => false,
         ]);
 
@@ -109,16 +110,16 @@ class BackupRestoreIntegrationTest extends TestCase
         file_put_contents($sourcePath.'/config.json', json_encode(['env' => 'prod']));
 
         config([
-            'vanguard.sources.filesystem_paths'   => [],
-            'vanguard.sources.filesystem_exclude'  => [],
-            'vanguard.sources.landlord_database'   => false,
-            'vanguard.sources.filesystem'          => true,
+            'vanguard.sources.filesystem_paths' => [],
+            'vanguard.sources.filesystem_exclude' => [],
+            'vanguard.sources.landlord_database' => false,
+            'vanguard.sources.filesystem' => true,
         ]);
 
         $dbDriver = Mockery::mock(DatabaseDriver::class);
         $fsDriver = new StorageDriver;
-        $store    = new BackupStorageManager;
-        $tenancy  = Mockery::mock(TenancyResolver::class);
+        $store = new BackupStorageManager;
+        $tenancy = Mockery::mock(TenancyResolver::class);
         $tenancy->shouldReceive('landlordDbConfig')->andReturn([]);
 
         // Directly call archive with our test path
@@ -156,7 +157,7 @@ class BackupRestoreIntegrationTest extends TestCase
     {
         config([
             'vanguard.sources.landlord_database' => false,
-            'vanguard.sources.filesystem'        => false,
+            'vanguard.sources.filesystem' => false,
         ]);
 
         $tenancy = Mockery::mock(TenancyResolver::class);
@@ -164,8 +165,8 @@ class BackupRestoreIntegrationTest extends TestCase
 
         $dbDriver = new DatabaseDriver;
         $fsDriver = new StorageDriver;
-        $store    = new BackupStorageManager;
-        $manager  = new BackupManager($dbDriver, $fsDriver, $store, $tenancy);
+        $store = new BackupStorageManager;
+        $manager = new BackupManager($dbDriver, $fsDriver, $store, $tenancy);
 
         $record = $manager->backupLandlord();
 
@@ -173,7 +174,7 @@ class BackupRestoreIntegrationTest extends TestCase
         $diskPath = Storage::disk('local')->path($record->file_path);
         file_put_contents($diskPath, 'TAMPERED CONTENT');
 
-        $store2  = new BackupStorageManager;
+        $store2 = new BackupStorageManager;
         $restore = new RestoreService($dbDriver, $fsDriver, $store2);
 
         $this->expectException(\RuntimeException::class);
@@ -191,7 +192,7 @@ class BackupRestoreIntegrationTest extends TestCase
     {
         config([
             'vanguard.sources.landlord_database' => false,
-            'vanguard.sources.filesystem'        => false,
+            'vanguard.sources.filesystem' => false,
         ]);
 
         $tenancy = Mockery::mock(TenancyResolver::class);
@@ -224,7 +225,7 @@ class BackupRestoreIntegrationTest extends TestCase
     {
         config([
             'vanguard.sources.landlord_database' => true,
-            'vanguard.sources.filesystem'        => false,
+            'vanguard.sources.filesystem' => false,
         ]);
 
         $dbDriver = Mockery::mock(DatabaseDriver::class);
@@ -242,7 +243,8 @@ class BackupRestoreIntegrationTest extends TestCase
 
         try {
             $manager->backupLandlord();
-        } catch (\RuntimeException) {}
+        } catch (\RuntimeException) {
+        }
 
         $record = BackupRecord::latest()->first();
 
@@ -265,14 +267,14 @@ class BackupRestoreIntegrationTest extends TestCase
         Storage::disk('local')->put('vanguard-backups/old.tar', 'data');
 
         $old = $this->makeRecord([
-            'status'    => 'completed',
+            'status' => 'completed',
             'file_path' => 'vanguard-backups/old.tar',
         ]);
-        \Illuminate\Support\Facades\DB::table('vanguard_backups')
+        DB::table('vanguard_backups')
             ->where('id', $old->id)
             ->update(['created_at' => now()->subDays(5)]);
 
-        $store   = new BackupStorageManager;
+        $store = new BackupStorageManager;
         $deleted = $store->pruneOldBackups();
 
         $this->assertSame(1, $deleted);

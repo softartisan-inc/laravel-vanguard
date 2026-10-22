@@ -11,9 +11,17 @@ use SoftArtisan\Vanguard\Jobs\RunTenantBackupJob;
 use SoftArtisan\Vanguard\Models\BackupRecord;
 use SoftArtisan\Vanguard\Services\Drivers\DatabaseDriver;
 use SoftArtisan\Vanguard\Services\Drivers\StorageDriver;
+use SoftArtisan\Vanguard\Services\Encryption\AgeEncryptor;
 
 class BackupManager
 {
+    /**
+     * Why a tenant backup without files is refused in single-database mode.
+     */
+    public const NOTHING_TO_BACK_UP_FOR_TENANT = 'nothing to back up for a tenant in single-database mode: '
+        .'the shared database is backed up by the landlord backup, and a tenant backup is the tenant\'s files. '
+        .'Drop --no-filesystem (include_filesystem=false) and keep vanguard.sources.filesystem enabled.';
+
     public function __construct(
         protected DatabaseDriver $db,
         protected StorageDriver $storage,
@@ -41,6 +49,7 @@ class BackupManager
     public function backupLandlord(array $options = []): BackupRecord
     {
         $this->assertSufficientDiskSpace();
+        $this->assertEncryptionReady();
 
         $record = $this->createRecord(null, 'landlord', $options);
         $emptyFilesystem = null;
@@ -53,7 +62,13 @@ class BackupManager
 
             // Central database
             if (config('vanguard.sources.landlord_database', true)) {
-                $dbConf = $this->tenancy->landlordDbConfig();
+                // vanguard.database.backup_connection, when set, names a
+                // dedicated connection. Unset, the call is the one it has
+                // always been — kept as is for resolvers extended or mocked
+                // by the host application.
+                $dbConf = filled(config('vanguard.database.backup_connection'))
+                    ? $this->tenancy->backupDbConfig()
+                    : $this->tenancy->landlordDbConfig();
                 $files['database'] = $this->db->dump(
                     driver: $dbConf['driver'],
                     config: $dbConf,
@@ -93,30 +108,50 @@ class BackupManager
      * Initialises the tenancy context via TenancyResolver::runForTenant() to
      * ensure the correct database connection is active during the dump.
      *
+     * In single-database mode (vanguard.tenancy.database_mode = 'single') there
+     * is no tenant database to dump: the shared database is the landlord
+     * backup's, so a tenant backup is the tenant's files only, and it includes
+     * them by default. A tenant backup asked to leave the files out is refused
+     * before any record is written — it would be an empty archive.
+     *
      * @param  mixed  $tenant  A tenant model instance (must implement getTenantKey())
      * @param  array  $options  Supported keys:
-     *                          - 'include_filesystem' (bool) — default false for tenant backups
+     *                          - 'include_filesystem' (bool) — default false for tenant backups,
+     *                          true in single-database mode
      * @return BackupRecord A freshly reloaded record with final status
      *
+     * @throws RuntimeException In single-database mode, when there is nothing to back up
      * @throws \Throwable Re-throws any exception after recording the failure
      */
     public function backupTenant(mixed $tenant, array $options = []): BackupRecord
     {
+        $singleDatabase = ! TenancyResolver::databaseModeIsDefault() && $this->tenancy->sharesOneDatabase();
+        $includeFilesystem = (bool) ($options['include_filesystem'] ?? $singleDatabase);
+
+        if ($singleDatabase && (! $includeFilesystem || ! config('vanguard.sources.filesystem', true))) {
+            throw new RuntimeException('[Vanguard] '.self::NOTHING_TO_BACK_UP_FOR_TENANT);
+        }
+
         $this->assertSufficientDiskSpace();
+        $this->assertEncryptionReady();
 
         $tenantId = $tenant->getTenantKey();
-        $record = $this->createRecord($tenantId, 'tenant', $options);
+        $record = $singleDatabase
+            ? $this->createRecord($tenantId, 'tenant', $options + ['database_mode' => 'single'], ['filesystem'])
+            : $this->createRecord($tenantId, 'tenant', $options);
         $emptyFilesystem = null;
 
         try {
             event(new BackupStarted($record));
 
-            $this->tenancy->runForTenant($tenant, function () use ($tenant, $record, $options, &$files, &$name, &$emptyFilesystem) {
+            $this->tenancy->runForTenant($tenant, function () use ($tenant, $record, $includeFilesystem, $singleDatabase, &$files, &$name, &$emptyFilesystem) {
                 $files = [];
                 $name = "tenant_{$tenant->getTenantKey()}_{$record->id}_".now()->format('Ymd_His');
 
-                // Tenant database
-                if (config('vanguard.sources.tenant_databases', true)) {
+                // Tenant database — none in single-database mode, where no
+                // tenant connection exists and the shared database is the
+                // landlord backup's.
+                if (! $singleDatabase && config('vanguard.sources.tenant_databases', true)) {
                     $dbConf = $this->tenancy->tenantDbConfig();
                     $files['database'] = $this->db->dump(
                         driver: $dbConf['driver'],
@@ -126,7 +161,7 @@ class BackupManager
                 }
 
                 // Tenant storage (if tenant has its own storage disk)
-                if (config('vanguard.sources.filesystem', true) && ($options['include_filesystem'] ?? false)) {
+                if (config('vanguard.sources.filesystem', true) && $includeFilesystem) {
                     // Resolved inside the tenancy window on purpose:
                     // stancl/tenancy has swapped storage_path() to the
                     // tenant's own root, which is the root the diagnosis has
@@ -172,6 +207,7 @@ class BackupManager
     public function backupFilesystem(array $options = []): BackupRecord
     {
         $this->assertSufficientDiskSpace();
+        $this->assertEncryptionReady();
 
         $record = $this->createRecord(null, 'filesystem', $options);
         $emptyFilesystem = null;
@@ -376,20 +412,40 @@ class BackupManager
     }
 
     /**
+     * Refuse a backup that would have to be encrypted and could not be.
+     *
+     * Only when vanguard.encryption is enabled — otherwise nothing is called.
+     * Checked before the record and the dump, beside the disk-space check: a
+     * missing age binary or recipient is a configuration error, and finding
+     * it after an hour of dumping would only waste the hour. There is no
+     * fallback to a plaintext archive.
+     *
+     * @throws RuntimeException
+     */
+    protected function assertEncryptionReady(): void
+    {
+        if (AgeEncryptor::configuredEnabled()) {
+            app(AgeEncryptor::class)->assertReady();
+        }
+    }
+
+    /**
      * Create and persist a new BackupRecord in 'running' status.
      *
      * @param  string|null  $tenantId  Null for landlord/filesystem backups
      * @param  string  $type  'landlord'|'tenant'|'filesystem'
      * @param  array  $meta  Arbitrary options stored on the record
+     * @param  array<int, string>|null  $sources  What this backup holds; null for
+     *                                            the configured sources
      */
-    protected function createRecord(?string $tenantId, string $type, array $meta = []): BackupRecord
+    protected function createRecord(?string $tenantId, string $type, array $meta = [], ?array $sources = null): BackupRecord
     {
         return BackupRecord::create([
             'tenant_id' => $tenantId,
             'type' => $type,
             'status' => 'running',
             'started_at' => now(),
-            'sources' => array_keys(array_filter([
+            'sources' => $sources ?? array_keys(array_filter([
                 'landlord_database' => config('vanguard.sources.landlord_database'),
                 'tenant_databases' => config('vanguard.sources.tenant_databases'),
                 'filesystem' => config('vanguard.sources.filesystem'),
@@ -410,7 +466,7 @@ class BackupManager
      */
     protected function completeRecord(BackupRecord $record, array $bundle): void
     {
-        $this->finishRecord($record, [
+        $attributes = [
             'status' => 'completed',
             'file_path' => $bundle['local_path'],
             'remote_path' => $bundle['remote_path'],
@@ -418,7 +474,20 @@ class BackupManager
             'file_size' => $bundle['size'],
             'checksum' => $bundle['checksum'],
             'completed_at' => now(),
-        ]);
+        ];
+
+        // Only an encrypted archive carries the key: the meta column of a
+        // plaintext backup is left exactly as it was. Encoded by hand because
+        // finishRecord() writes through the query builder, which does not
+        // apply the model's casts.
+        if (isset($bundle['encryption'])) {
+            $attributes['meta'] = json_encode(
+                array_merge((array) $record->meta, ['encryption' => $bundle['encryption']]),
+                JSON_THROW_ON_ERROR,
+            );
+        }
+
+        $this->finishRecord($record, $attributes);
     }
 
     /**

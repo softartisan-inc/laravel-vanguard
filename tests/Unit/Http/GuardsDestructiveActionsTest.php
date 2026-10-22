@@ -77,7 +77,7 @@ class GuardsDestructiveActionsTest extends TestCase
     #[Test]
     public function it_names_the_actor_and_the_target_in_the_trace(): void
     {
-        Vanguard::restoreActor(fn () => 'ops@in-immo.app');
+        Vanguard::restoreActor(fn () => 'ops@example.com');
 
         $logger = Log::spy();
 
@@ -86,7 +86,7 @@ class GuardsDestructiveActionsTest extends TestCase
         try {
             $logger->shouldHaveReceived('warning')->withArgs(
                 fn (string $message, array $context) => $message === '[Vanguard] restore requested'
-                    && $context['actor'] === 'ops@in-immo.app'
+                    && $context['actor'] === 'ops@example.com'
                     && $context['target'] === 'tenant:9001'
                     && $context['backup_id'] === 42,
             );

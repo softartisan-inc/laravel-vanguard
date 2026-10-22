@@ -27,6 +27,13 @@ class DatabaseDriver
     /** errno for a system call interrupted by a signal — see selectInterruptedBySignal(). */
     protected const ERRNO_EINTR = 4;
 
+    /** vanguard.dump.pgsql_version_check values. 'off' is the default and the pre-existing behaviour. */
+    public const PG_VERSION_CHECK_OFF = 'off';
+
+    public const PG_VERSION_CHECK_WARN = 'warn';
+
+    public const PG_VERSION_CHECK_STRICT = 'strict';
+
     /**
      * The client each driver's dump and restore actually shells out to, and
      * what happens when it is missing.
@@ -130,6 +137,205 @@ class DatabaseDriver
             'degraded' => $ok && ($operations['dump']['via'] === 'pdo' || $operations['restore']['via'] === 'pdo'),
             'reason' => $reasons === [] ? null : implode(' ', $reasons),
         ];
+    }
+
+    // ─── pg_dump / server version check (opt-in) ──────────────────
+
+    /**
+     * The pg_dump version check mode: 'off', 'warn' or 'strict'.
+     *
+     * Read at runtime from vanguard.dump.pgsql_version_check. Missing (a
+     * config published before the key existed) or blank means 'off', the
+     * pre-existing behaviour. An unknown value is logged and treated as
+     * 'warn': a typo in a diagnostic setting must neither block backups nor
+     * silently disable the check its author asked for.
+     */
+    public static function pgVersionCheckMode(): string
+    {
+        $configured = config('vanguard.dump.pgsql_version_check', self::PG_VERSION_CHECK_OFF);
+
+        if ($configured === null || $configured === false || (is_string($configured) && trim($configured) === '')) {
+            return self::PG_VERSION_CHECK_OFF;
+        }
+
+        $mode = is_string($configured) ? strtolower(trim($configured)) : '';
+
+        if (in_array($mode, [self::PG_VERSION_CHECK_OFF, self::PG_VERSION_CHECK_WARN, self::PG_VERSION_CHECK_STRICT], true)) {
+            return $mode;
+        }
+
+        Log::warning(sprintf(
+            '[Vanguard] Unknown vanguard.dump.pgsql_version_check [%s] (expected off, warn or strict): treated as warn.',
+            is_scalar($configured) ? (string) $configured : get_debug_type($configured),
+        ));
+
+        return self::PG_VERSION_CHECK_WARN;
+    }
+
+    /**
+     * Compare the major version of the resolved pg_dump with the server's.
+     *
+     * 'compatible' is true when pg_dump is the same major or newer, false
+     * when it is older (pg_dump refuses to dump a newer server), and null
+     * when either version could not be read — unknown, not a mismatch.
+     *
+     * Asks the server over its own connection: only call it when the check
+     * is enabled.
+     *
+     * @param  array  $c  Laravel PostgreSQL connection config (the one the dump uses)
+     * @return array{binary: string, client: int|null, server: int|null, compatible: bool|null, reason: string|null}
+     */
+    public function pgVersionReport(array $c): array
+    {
+        $binary = $this->resolveBinary('pg_dump');
+        $client = $this->pgDumpMajorVersion($binary);
+        $server = $this->pgServerMajorVersion($c);
+
+        if ($client === null || $server === null) {
+            return [
+                'binary' => $binary,
+                'client' => $client,
+                'server' => $server,
+                'compatible' => null,
+                'reason' => sprintf(
+                    '[Vanguard:pg_dump] Version check skipped: could not read the %s version (pg_dump [%s]%s).',
+                    $client === null ? 'pg_dump' : 'server',
+                    $binary,
+                    $client === null ? '' : ", major {$client}",
+                ),
+            ];
+        }
+
+        if ($client >= $server) {
+            return [
+                'binary' => $binary,
+                'client' => $client,
+                'server' => $server,
+                'compatible' => true,
+                'reason' => null,
+            ];
+        }
+
+        $suggestion = "/usr/lib/postgresql/{$server}/bin/pg_dump";
+        $hint = $this->binaryAvailable($suggestion)
+            ? " A pg_dump {$server} is installed on this host: VANGUARD_PG_DUMP_BINARY={$suggestion}."
+            : " Install the PostgreSQL {$server} client (e.g. postgresql-client-{$server}) and point VANGUARD_PG_DUMP_BINARY at its pg_dump.";
+
+        return [
+            'binary' => $binary,
+            'client' => $client,
+            'server' => $server,
+            'compatible' => false,
+            'reason' => sprintf(
+                '[Vanguard:pg_dump] pg_dump %d (binary [%s]) cannot dump a PostgreSQL %d server: pg_dump must be the '
+                .'same major version as the server or newer. Set VANGUARD_PG_DUMP_BINARY (vanguard.binaries.pg_dump) '
+                .'to a pg_dump %d or newer.%s',
+                $client,
+                $binary,
+                $server,
+                $server,
+                $hint,
+            ),
+        ];
+    }
+
+    /**
+     * Refuse (strict) or report (warn) a pg_dump older than the server, before the dump.
+     *
+     * @param  array  $c  Laravel PostgreSQL connection config (the one the dump uses)
+     * @param  string  $mode  'warn'|'strict'
+     *
+     * @throws RuntimeException In strict mode, when pg_dump is provably older than the server
+     */
+    protected function assertPgDumpCompatible(array $c, string $mode): void
+    {
+        $report = $this->pgVersionReport($c);
+
+        if ($report['compatible'] === true) {
+            return;
+        }
+
+        if ($report['compatible'] === false && $mode === self::PG_VERSION_CHECK_STRICT) {
+            throw new RuntimeException($report['reason']);
+        }
+
+        Log::warning($report['reason']);
+    }
+
+    /**
+     * The major version of a pg_dump binary, from `pg_dump --version`.
+     *
+     * "pg_dump (PostgreSQL) 18.6 (Debian …)" ⇒ 18; "… 9.6.24" ⇒ 9. Started
+     * with an argv array (no shell); null when it cannot run or the output
+     * is not recognised.
+     */
+    protected function pgDumpMajorVersion(string $binary): ?int
+    {
+        $process = @proc_open([$binary, '--version'], [
+            0 => ['pipe', 'r'],
+            1 => ['pipe', 'w'],
+            2 => ['pipe', 'w'],
+        ], $pipes);
+
+        if (! is_resource($process)) {
+            return null;
+        }
+
+        fclose($pipes[0]);
+        $output = (string) stream_get_contents($pipes[1]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+
+        if (proc_close($process) !== 0) {
+            return null;
+        }
+
+        if (preg_match('/\(PostgreSQL\)\s+(\d+)/', $output, $m) !== 1) {
+            return null;
+        }
+
+        return (int) $m[1];
+    }
+
+    /**
+     * The major version of the PostgreSQL server behind a connection config.
+     *
+     * SHOW server_version_num (180006 ⇒ 18) over a short-lived PDO
+     * connection made with the very config the dump uses — the dedicated
+     * backup connection when one is configured. Null when the server cannot
+     * be reached or pdo_pgsql is missing; the dump then reports its own error.
+     *
+     * @param  array  $c  Laravel PostgreSQL connection config
+     */
+    protected function pgServerMajorVersion(array $c): ?int
+    {
+        if (! in_array('pgsql', \PDO::getAvailableDrivers(), true)) {
+            return null;
+        }
+
+        $dsn = sprintf(
+            'pgsql:host=%s;port=%s;dbname=%s',
+            (string) ($c['host'] ?? '127.0.0.1'),
+            (string) ($c['port'] ?? 5432),
+            (string) ($c['database'] ?? ''),
+        );
+
+        if (! empty($c['sslmode'])) {
+            $dsn .= ';sslmode='.$c['sslmode'];
+        }
+
+        try {
+            $pdo = new \PDO($dsn, (string) ($c['username'] ?? ''), (string) ($c['password'] ?? ''), [
+                \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
+                \PDO::ATTR_TIMEOUT => 5,
+            ]);
+
+            $number = $pdo->query('SHOW server_version_num')->fetchColumn();
+        } catch (\Throwable) {
+            return null;
+        }
+
+        return is_numeric($number) && (int) $number >= 10000 ? intdiv((int) $number, 10000) : null;
     }
 
     /**
@@ -979,6 +1185,14 @@ class DatabaseDriver
      */
     protected function dumpPgsql(array $c, string $dest): void
     {
+        // Opt-in (vanguard.dump.pgsql_version_check). Off, nothing below runs:
+        // no `pg_dump --version`, no connection to the server.
+        $versionCheck = self::pgVersionCheckMode();
+
+        if ($versionCheck !== self::PG_VERSION_CHECK_OFF) {
+            $this->assertPgDumpCompatible($c, $versionCheck);
+        }
+
         // Started directly, not through a shell pipeline: piping into gzip
         // meant the exit code checked was gzip's, so a pg_dump that died
         // halfway still produced a "successful" archive — with its error
