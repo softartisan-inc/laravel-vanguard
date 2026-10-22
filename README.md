@@ -21,8 +21,56 @@ existing installation behaves exactly as before until it sets them:
 [dedicated backup/restore connections](#dedicated-backuprestore-connections-postgresql-rls),
 [`pg_dump` version check](#postgresql-matching-pg_dump-to-the-server),
 [encrypted archives](#encrypted-archives-age) and [Cloudflare R2](#cloudflare-r2).
+See [Upgrading to 2.7](#upgrading-to-27) before upgrading an application that extends Vanguard.
 
 Without the `mysqldump` binary, MySQL dumps fall back to a pure-PDO implementation (slower, but no binary needed). Binary locations can be pinned in `vanguard.binaries` when they are not in the PATH of your web/queue process.
+
+---
+
+## Upgrading to 2.7
+
+Nothing to do for an application that only uses Vanguard: the defaults are
+unchanged, there is no migration, and archives taken with earlier 2.x versions
+restore as before.
+
+**1. No need to republish the config.** Every new key falls back to a default
+that keeps the 2.6 behaviour. `php artisan vanguard:install` lists them under
+*New optional settings (disabled by default, nothing to do)*; only keys whose
+absence can change behaviour are reported as *missing*. To opt in, note that
+Laravel merges the package config one level deep only: the new `database`,
+`encryption` and `r2` sections are read from their environment variables as
+is, but a key nested in a section your published config already has —
+`tenancy.database_mode`, `dump.pgsql_version_check`, `binaries.age` — must be
+copied into your `config/vanguard.php` first, or its environment variable is
+never read. `vanguard:install` flags those keys.
+
+**2. A subclass that redefines `BackupManager::createRecord()`.** It gained a
+fourth, optional parameter, `?array $sources = null` (what the backup holds;
+`null` for the configured sources). PHP requires an overriding method to accept
+it, so add it to your signature and pass it on:
+
+```php
+protected function createRecord(?string $tenantId, string $type, array $meta = [], ?array $sources = null): BackupRecord
+{
+    // ...
+    return parent::createRecord($tenantId, $type, $meta, $sources);
+}
+```
+
+A subclass that only *calls* `createRecord()` has nothing to change.
+
+**3. A subclass that writes its own backups.** When it dumps and archives on
+its own instead of going through `backupLandlord()` / `backupTenant()` /
+`backupFilesystem()`, call `$this->assertEncryptionReady()` before dumping or
+archiving to honour the opt-in [encryption](#encrypted-archives-age) the same
+way: with encryption on and no usable recipient or `age` binary, the backup is
+refused before anything is dumped. Without that call the same error is raised
+later, when the archive is bundled — never a plaintext archive, but only once
+the dump has run.
+
+```bash
+composer require softartisan/laravel-vanguard:^2.7
+```
 
 ---
 

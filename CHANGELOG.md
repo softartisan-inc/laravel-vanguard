@@ -7,7 +7,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
-## [2.7.0] — 2026-10-15
+## [2.7.0] — 2026-10-22
 
 ### Every new mode is opt-in; the defaults are unchanged
 
@@ -57,8 +57,35 @@ same API payloads as before. Tests cover the default of each new setting.
   touched. `Vanguard::r2DiskConfig()` builds it for a disk of your own. The
   health screen and `vanguard:install` name the missing
   `league/flysystem-aws-s3-v3` adapter. See *Cloudflare R2*.
-- `vanguard:install` lists the new variables, and flags them as missing from a
-  config published by an earlier version.
+- `vanguard:install` lists the new variables. Against a config published by an
+  earlier version, its drift report lists them apart, under *New optional
+  settings (disabled by default, nothing to do)*, and keeps *missing* for the
+  keys whose absence can change behaviour (such as `notifications.mail.to`).
+  Opt-in keys nested in a section the published config already has are flagged:
+  they must be copied into it before their environment variable is read.
+
+### Upgrade notes — for packages that extend Vanguard
+
+Applications that only use Vanguard have nothing to do. See *Upgrading to 2.7*
+in the README.
+
+- **`BackupManager::createRecord()`** gains a fourth, optional parameter,
+  `?array $sources = null` (what the backup holds; `null` for the configured
+  sources). A subclass that **redefines** it must add the parameter to stay
+  signature-compatible (PHP refuses an override that accepts fewer
+  parameters); a subclass that only calls it has nothing to change.
+- **A subclass that writes its own backups** (dumping and archiving outside
+  `backupLandlord()` / `backupTenant()` / `backupFilesystem()`) should call
+  `assertEncryptionReady()` before dumping or archiving to honour the opt-in
+  encryption. Without it, a missing recipient or `age` binary is only reported
+  when the archive is bundled — after the dump, but never as a plaintext
+  archive.
+- **The published config does not need to be republished**: the new keys fall
+  back to defaults that keep the 2.6 behaviour. To opt in from an older
+  config, the keys nested in an existing section (`tenancy.database_mode`,
+  `dump.pgsql_version_check`, `binaries.age`) must first be copied into it:
+  Laravel merges a package config one level deep only. The new `database`,
+  `encryption` and `r2` sections need no copy.
 
 ### Documentation
 
